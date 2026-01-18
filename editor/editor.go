@@ -90,6 +90,9 @@ type Editor struct {
 
 	// Key throttling
 	lastPageKey time.Time
+
+	// About dialog state
+	aboutQuote string
 }
 
 // New creates a new editor instance
@@ -504,7 +507,7 @@ func (e *Editor) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		e.updateViewportSize()
 		return e, nil
 	case "f1":
-		e.statusbar.SetMessage("Festivus v0.1 | F10=Menu | Ctrl+S=Save | Ctrl+Q=Quit", "info")
+		e.showAbout()
 		return e, nil
 	case "f2":
 		e.insertLoremIpsum()
@@ -876,7 +879,7 @@ func (e *Editor) executeAction(action ui.MenuAction) (tea.Model, tea.Cmd) {
 	case ui.ActionLineNumbers:
 		e.toggleLineNumbers()
 	case ui.ActionAbout:
-		e.mode = ModeAbout
+		e.showAbout()
 	}
 	return e, nil
 }
@@ -915,6 +918,12 @@ func (e *Editor) toggleLineNumbers() {
 
 	// Ensure cursor stays visible after toggle (text width changes)
 	e.viewport.EnsureCursorVisibleWrapped(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
+}
+
+// showAbout opens the About dialog with a random quote
+func (e *Editor) showAbout() {
+	e.mode = ModeAbout
+	e.aboutQuote = FestivusQuotes[rand.Intn(len(FestivusQuotes))]
 }
 
 // Text manipulation methods
@@ -1410,44 +1419,46 @@ func visualWidth(s string) int {
 
 // overlayAboutDialog overlays the about dialog centered on the viewport
 func (e *Editor) overlayAboutDialog(viewportContent string) string {
-	// Pick a random Festivus quote
-	quote := FestivusQuotes[rand.Intn(len(FestivusQuotes))]
+	// Use the stored quote (selected when dialog opened)
+	quote := e.aboutQuote
+	if quote == "" {
+		quote = "A Festivus for the rest of us!"
+	}
 
-	// Center the quote (max width ~38 chars to fit in box)
-	maxQuoteWidth := 38
-	quoteLine := quote
+	// Truncate quote if needed (box is 64, minus 2 for quotes, leave margin)
+	maxQuoteWidth := 58
 	if len(quote) > maxQuoteWidth {
-		quoteLine = quote[:maxQuoteWidth-3] + "..."
+		quote = quote[:maxQuoteWidth-3] + "..."
 	}
-	quotePadLeft := (40 - len(quoteLine)) / 2
-	quotePadRight := 40 - len(quoteLine) - quotePadLeft
-	formattedQuote := "║ " + strings.Repeat(" ", quotePadLeft) + quoteLine + strings.Repeat(" ", quotePadRight) + " ║"
 
-	// Simple ASCII art that renders reliably
+	// ASCII art from festivus.txt - art is 62 chars, box is 64 for padding
+	boxWidth := 64
+	centerText := func(s string) string {
+		padLeft := (boxWidth - len(s)) / 2
+		padRight := boxWidth - len(s) - padLeft
+		return strings.Repeat(" ", padLeft) + s + strings.Repeat(" ", padRight)
+	}
+
 	aboutLines := []string{
-		"╔══════════════════════════════════════════╗",
-		"║                                          ║",
-		"║   ####  ####  #### #####  #  #   #  #    ║",
-		"║   #     #     #      #    #  #   #  #    ║",
-		"║   ###   ###   ####   #    #  #   #  #    ║",
-		"║   #     #        #   #    #   # #   #    ║",
-		"║   #     ####  ####   #    #    #    #### ║",
-		"║                                          ║",
-		"║     A Text Editor for the Rest of Us     ║",
-		"║                                          ║",
-		"║              Version 0.1.0               ║",
-		"║                                          ║",
-		"║   github.com/cornish/festivus            ║",
-		"║   Copyright (c) 2025                     ║",
-		"║                                          ║",
-		formattedQuote,
-		"║                                          ║",
-		"║       Press any key to continue...       ║",
-		"║                                          ║",
-		"╚══════════════════════════════════════════╝",
+		strings.Repeat(" ", boxWidth),
+		" ███████╗███████╗███████╗████████╗██╗██╗   ██╗██╗   ██╗███████╗ ",
+		" ██╔════╝██╔════╝██╔════╝╚══██╔══╝██║██║   ██║██║   ██║██╔════╝ ",
+		" █████╗  █████╗  ███████╗   ██║   ██║██║   ██║██║   ██║███████╗ ",
+		" ██╔══╝  ██╔══╝  ╚════██║   ██║   ██║╚██╗ ██╔╝██║   ██║╚════██║ ",
+		" ██║     ███████╗███████║   ██║   ██║ ╚████╔╝ ╚██████╔╝███████║ ",
+		" ╚═╝     ╚══════╝╚══════╝   ╚═╝   ╚═╝  ╚═══╝   ╚═════╝ ╚══════╝ ",
+		strings.Repeat(" ", boxWidth),
+		centerText("A Text Editor for the Rest of Us"),
+		strings.Repeat(" ", boxWidth),
+		centerText("Version 0.1.0"),
+		centerText("github.com/cornish/festivus"),
+		centerText("Copyright (c) 2025"),
+		strings.Repeat(" ", boxWidth),
+		centerText("\"" + quote + "\""),
+		strings.Repeat(" ", boxWidth),
+		centerText("Press any key to continue..."),
+		strings.Repeat(" ", boxWidth),
 	}
-
-	boxWidth := 44 // Width of the about box
 	boxHeight := len(aboutLines)
 
 	// Calculate centering
