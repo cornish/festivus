@@ -29,6 +29,7 @@ const (
 	// View menu
 	ActionWordWrap
 	ActionLineNumbers
+	ActionSyntaxHighlight
 	// Help menu
 	ActionAbout
 )
@@ -86,10 +87,11 @@ func NewMenuBar(styles Styles) *MenuBar {
 				},
 			},
 			{
-				Label: "View",
+				Label: "Options",
 				Items: []MenuItem{
 					{Label: "[ ] Word Wrap", Shortcut: "Ctrl+W", HotKey: 'W', Action: ActionWordWrap},
 					{Label: "[ ] Line Numbers", Shortcut: "Ctrl+L", HotKey: 'L', Action: ActionLineNumbers},
+					{Label: "[x] Syntax Highlight", Shortcut: "", HotKey: 'S', Action: ActionSyntaxHighlight},
 				},
 			},
 			{

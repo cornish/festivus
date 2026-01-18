@@ -4,6 +4,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"festivus/syntax"
+
 	"github.com/mattn/go-runewidth"
 )
 
@@ -279,15 +281,16 @@ type SelectionRange struct {
 }
 
 // Render renders the visible portion of the text
-func (v *Viewport) Render(lines []string, cursorLine, cursorCol int, selection map[int]SelectionRange) string {
+// lineColors is an optional map of line index to color spans for syntax highlighting
+func (v *Viewport) Render(lines []string, cursorLine, cursorCol int, selection map[int]SelectionRange, lineColors map[int][]syntax.ColorSpan) string {
 	if v.wordWrap {
-		return v.renderWrapped(lines, cursorLine, cursorCol, selection)
+		return v.renderWrapped(lines, cursorLine, cursorCol, selection, lineColors)
 	}
-	return v.renderNoWrap(lines, cursorLine, cursorCol, selection)
+	return v.renderNoWrap(lines, cursorLine, cursorCol, selection, lineColors)
 }
 
 // renderNoWrap renders without word wrap (original behavior)
-func (v *Viewport) renderNoWrap(lines []string, cursorLine, cursorCol int, selection map[int]SelectionRange) string {
+func (v *Viewport) renderNoWrap(lines []string, cursorLine, cursorCol int, selection map[int]SelectionRange, lineColors map[int][]syntax.ColorSpan) string {
 	var sb strings.Builder
 
 	endLine := v.scrollY + v.height
@@ -315,8 +318,14 @@ func (v *Viewport) renderNoWrap(lines []string, cursorLine, cursorCol int, selec
 			line = lines[lineIdx]
 		}
 
+		// Get syntax colors for this line
+		var colors []syntax.ColorSpan
+		if lineColors != nil {
+			colors = lineColors[lineIdx]
+		}
+
 		// Apply horizontal scroll
-		displayLine := v.renderLineContent(line, lineIdx, cursorLine, cursorCol, selection)
+		displayLine := v.renderLineContent(line, lineIdx, cursorLine, cursorCol, selection, colors)
 		sb.WriteString(displayLine)
 	}
 
@@ -335,7 +344,7 @@ func (v *Viewport) renderNoWrap(lines []string, cursorLine, cursorCol int, selec
 }
 
 // renderWrapped renders with word wrap enabled
-func (v *Viewport) renderWrapped(lines []string, cursorLine, cursorCol int, selection map[int]SelectionRange) string {
+func (v *Viewport) renderWrapped(lines []string, cursorLine, cursorCol int, selection map[int]SelectionRange, lineColors map[int][]syntax.ColorSpan) string {
 	var sb strings.Builder
 	textWidth := v.TextWidth()
 	visualLineCount := 0
@@ -369,6 +378,12 @@ func (v *Viewport) renderWrapped(lines []string, cursorLine, cursorCol int, sele
 		sel := selection[logicalLine]
 		wrappedLines := v.wrapLine(line, textWidth)
 
+		// Get syntax colors for this line
+		var colors []syntax.ColorSpan
+		if lineColors != nil {
+			colors = lineColors[logicalLine]
+		}
+
 		for wrapIdx := 0; wrapIdx < len(wrappedLines) && visualLineCount < v.height; wrapIdx++ {
 			// Skip lines before our start offset
 			if logicalLine == 0 || visualLinesSkipped < v.scrollY {
@@ -399,7 +414,7 @@ func (v *Viewport) renderWrapped(lines []string, cursorLine, cursorCol int, sele
 
 			// Render the wrapped segment
 			content := v.renderWrappedSegment(wrappedLines[wrapIdx], logicalLine, segmentStartCol,
-				cursorLine, cursorCol, sel, textWidth)
+				cursorLine, cursorCol, sel, textWidth, colors)
 			sb.WriteString(content)
 
 			visualLineCount++
@@ -458,7 +473,7 @@ func (v *Viewport) wrapLine(line string, textWidth int) []string {
 }
 
 // renderWrappedSegment renders a single wrapped segment of a line
-func (v *Viewport) renderWrappedSegment(segment string, lineIdx, segmentStartCol, cursorLine, cursorCol int, sel SelectionRange, textWidth int) string {
+func (v *Viewport) renderWrappedSegment(segment string, lineIdx, segmentStartCol, cursorLine, cursorCol int, sel SelectionRange, textWidth int, colors []syntax.ColorSpan) string {
 	var sb strings.Builder
 	runes := []rune(segment)
 
@@ -477,7 +492,15 @@ func (v *Viewport) renderWrappedSegment(segment string, lineIdx, segmentStartCol
 		} else if isSelected {
 			sb.WriteString(v.styles.Selection.Render(char))
 		} else {
-			sb.WriteString(char)
+			// Apply syntax color if available
+			syntaxColor := syntax.ColorAt(colors, col)
+			if syntaxColor != "" {
+				sb.WriteString(syntaxColor)
+				sb.WriteString(char)
+				sb.WriteString("\033[0m") // Reset
+			} else {
+				sb.WriteString(char)
+			}
 		}
 	}
 
@@ -500,7 +523,7 @@ func (v *Viewport) renderWrappedSegment(segment string, lineIdx, segmentStartCol
 }
 
 // renderLineContent renders a single line's content with selection and cursor
-func (v *Viewport) renderLineContent(line string, lineIdx, cursorLine, cursorCol int, selection map[int]SelectionRange) string {
+func (v *Viewport) renderLineContent(line string, lineIdx, cursorLine, cursorCol int, selection map[int]SelectionRange, colors []syntax.ColorSpan) string {
 	textWidth := v.TextWidth()
 
 	// Convert line to runes for proper unicode handling
@@ -554,7 +577,15 @@ func (v *Viewport) renderLineContent(line string, lineIdx, cursorLine, cursorCol
 		} else if isSelected {
 			sb.WriteString(v.styles.Selection.Render(char))
 		} else {
-			sb.WriteString(char)
+			// Apply syntax color if available
+			syntaxColor := syntax.ColorAt(colors, runeIdx)
+			if syntaxColor != "" {
+				sb.WriteString(syntaxColor)
+				sb.WriteString(char)
+				sb.WriteString("\033[0m") // Reset
+			} else {
+				sb.WriteString(char)
+			}
 		}
 
 		visualCol += rw

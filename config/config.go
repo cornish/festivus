@@ -14,16 +14,18 @@ type Config struct {
 
 // EditorConfig holds editor-specific settings
 type EditorConfig struct {
-	WordWrap    bool `toml:"word_wrap"`
-	LineNumbers bool `toml:"line_numbers"`
+	WordWrap        bool `toml:"word_wrap"`
+	LineNumbers     bool `toml:"line_numbers"`
+	SyntaxHighlight bool `toml:"syntax_highlight"`
 }
 
 // DefaultConfig returns the default configuration
 func DefaultConfig() *Config {
 	return &Config{
 		Editor: EditorConfig{
-			WordWrap:    false,
-			LineNumbers: false,
+			WordWrap:        false,
+			LineNumbers:     false,
+			SyntaxHighlight: true, // Enabled by default
 		},
 	}
 }

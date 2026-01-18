@@ -11,6 +11,7 @@ import (
 
 	"festivus/clipboard"
 	"festivus/config"
+	"festivus/syntax"
 	"festivus/ui"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -148,6 +149,9 @@ type Editor struct {
 	// Save As state
 	saveAsFilename string // Filename input for Save As dialog
 
+	// Syntax highlighting
+	highlighter *syntax.Highlighter
+
 	// Configuration
 	config *config.Config
 }
@@ -163,19 +167,20 @@ func NewWithConfig(cfg *config.Config) *Editor {
 	buf := NewBuffer()
 
 	e := &Editor{
-		buffer:    buf,
-		cursor:    NewCursor(buf),
-		selection: NewSelection(),
-		undoStack: NewUndoStack(1000),
-		clipboard: clipboard.New(os.Stdout),
-		menubar:   ui.NewMenuBar(styles),
-		statusbar: ui.NewStatusBar(styles),
-		viewport:  ui.NewViewport(styles),
-		styles:    styles,
-		mode:      ModeNormal,
-		width:     80,
-		height:    24,
-		config:    cfg,
+		buffer:      buf,
+		cursor:      NewCursor(buf),
+		selection:   NewSelection(),
+		undoStack:   NewUndoStack(1000),
+		clipboard:   clipboard.New(os.Stdout),
+		menubar:     ui.NewMenuBar(styles),
+		statusbar:   ui.NewStatusBar(styles),
+		viewport:    ui.NewViewport(styles),
+		highlighter: syntax.New(""), // Initialize with no file
+		styles:      styles,
+		mode:        ModeNormal,
+		width:       80,
+		height:      24,
+		config:      cfg,
 	}
 
 	// Apply config settings
@@ -189,6 +194,14 @@ func NewWithConfig(cfg *config.Config) *Editor {
 		}
 		if cfg.Editor.LineNumbers {
 			e.menubar.SetItemLabel(ui.ActionLineNumbers, "[x] Line Numbers")
+		}
+
+		// Apply syntax highlighting setting
+		if cfg.Editor.SyntaxHighlight {
+			e.highlighter.SetEnabled(true)
+			e.menubar.SetItemLabel(ui.ActionSyntaxHighlight, "[x] Syntax Highlight")
+		} else {
+			e.highlighter.SetEnabled(false)
 		}
 	}
 
@@ -210,6 +223,9 @@ func (e *Editor) LoadFile(filename string) error {
 	e.modified = false
 	e.updateTitle()
 	e.updateMenuState()
+
+	// Update syntax highlighter for new file
+	e.highlighter.SetFile(filename)
 
 	return nil
 }
@@ -620,7 +636,7 @@ func (e *Editor) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				e.menubar.OpenMenu(1)
 				e.updateViewportSize()
 				return e, nil
-			case 'v', 'V':
+			case 'o', 'O':
 				e.mode = ModeMenu
 				e.menubar.OpenMenu(2)
 				e.updateViewportSize()
@@ -653,9 +669,9 @@ func (e *Editor) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		e.menubar.OpenMenu(1) // Edit
 		e.updateViewportSize()
 		return e, nil
-	case "alt+v":
+	case "alt+o":
 		e.mode = ModeMenu
-		e.menubar.OpenMenu(2) // View
+		e.menubar.OpenMenu(2) // Options
 		e.updateViewportSize()
 		return e, nil
 	case "alt+h":
@@ -1325,6 +1341,8 @@ func (e *Editor) executeAction(action ui.MenuAction) (tea.Model, tea.Cmd) {
 		e.toggleWordWrap()
 	case ui.ActionLineNumbers:
 		e.toggleLineNumbers()
+	case ui.ActionSyntaxHighlight:
+		e.toggleSyntaxHighlight()
 	case ui.ActionAbout:
 		e.showAbout()
 	}
@@ -1373,6 +1391,24 @@ func (e *Editor) toggleLineNumbers() {
 	e.saveConfig()
 }
 
+// toggleSyntaxHighlight toggles syntax highlighting on/off
+func (e *Editor) toggleSyntaxHighlight() {
+	enabled := !e.highlighter.Enabled()
+	e.highlighter.SetEnabled(enabled)
+
+	// Update menu checkbox
+	if enabled {
+		e.menubar.SetItemLabel(ui.ActionSyntaxHighlight, "[x] Syntax Highlight")
+		e.statusbar.SetMessage("Syntax highlighting enabled", "info")
+	} else {
+		e.menubar.SetItemLabel(ui.ActionSyntaxHighlight, "[ ] Syntax Highlight")
+		e.statusbar.SetMessage("Syntax highlighting disabled", "info")
+	}
+
+	// Save to config
+	e.saveConfig()
+}
+
 // saveConfig saves the current settings to the config file
 func (e *Editor) saveConfig() {
 	if e.config == nil {
@@ -1380,6 +1416,7 @@ func (e *Editor) saveConfig() {
 	}
 	e.config.Editor.WordWrap = e.viewport.WordWrap()
 	e.config.Editor.LineNumbers = e.viewport.ShowLineNum()
+	e.config.Editor.SyntaxHighlight = e.highlighter.Enabled()
 	// Save in background - don't block the UI
 	go e.config.Save()
 }
@@ -1618,6 +1655,7 @@ func (e *Editor) doNewFile() {
 	e.undoStack.Clear()
 	e.filename = ""
 	e.modified = false
+	e.highlighter.SetFile("") // Clear syntax highlighter
 	e.updateTitle()
 	e.updateMenuState()
 	e.statusbar.SetMessage("New file", "info")
@@ -1914,7 +1952,26 @@ func (e *Editor) View() string {
 
 	// Editor viewport
 	lines := e.buffer.Lines()
-	viewportContent := e.viewport.Render(lines, e.cursor.Line(), e.cursor.Col(), selectionMap)
+
+	// Generate syntax highlighting colors for visible lines
+	var lineColors map[int][]syntax.ColorSpan
+	if e.highlighter.Enabled() && e.highlighter.HasLexer() {
+		lineColors = make(map[int][]syntax.ColorSpan)
+		// Calculate visible line range
+		startLine := e.viewport.ScrollY()
+		endLine := startLine + e.viewport.Height()
+		if endLine > len(lines) {
+			endLine = len(lines)
+		}
+		for i := startLine; i < endLine; i++ {
+			colors := e.highlighter.GetLineColors(lines[i])
+			if len(colors) > 0 {
+				lineColors[i] = colors
+			}
+		}
+	}
+
+	viewportContent := e.viewport.Render(lines, e.cursor.Line(), e.cursor.Col(), selectionMap, lineColors)
 
 	// If menu dropdown is open, overlay it on top of the viewport
 	if e.menubar.IsOpen() {
@@ -1988,6 +2045,7 @@ func (e *Editor) View() string {
 // SetFilename sets the filename for the editor
 func (e *Editor) SetFilename(filename string) {
 	e.filename = filename
+	e.highlighter.SetFile(filename) // Update syntax highlighter
 }
 
 // overlayLineAt overlays the dropdown line on top of the viewport line at the given offset,
