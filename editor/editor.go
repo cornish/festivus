@@ -15,6 +15,7 @@ import (
 	"festivus/ui"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/mattn/go-runewidth"
 )
 
 // Mode represents the editor mode
@@ -33,9 +34,52 @@ const (
 
 // FileEntry represents a file or directory in the file browser
 type FileEntry struct {
-	Name  string
-	IsDir bool
-	Size  int64
+	Name     string
+	IsDir    bool
+	Size     int64
+	Readable bool // For directories: whether we can read/enter it
+}
+
+// BoxChars holds characters used for drawing dialog boxes
+type BoxChars struct {
+	TopLeft     string
+	TopRight    string
+	BottomLeft  string
+	BottomRight string
+	Horizontal  string
+	Vertical    string
+	TeeLeft     string
+	TeeRight    string
+	Lock        string
+	Ellipsis    string
+}
+
+// UnicodeBoxChars provides Unicode box drawing characters
+var UnicodeBoxChars = BoxChars{
+	TopLeft:     "┌",
+	TopRight:    "┐",
+	BottomLeft:  "└",
+	BottomRight: "┘",
+	Horizontal:  "─",
+	Vertical:    "│",
+	TeeLeft:     "├",
+	TeeRight:    "┤",
+	Lock:        "🔒",
+	Ellipsis:    "…",
+}
+
+// AsciiBoxChars provides ASCII fallback characters
+var AsciiBoxChars = BoxChars{
+	TopLeft:     "+",
+	TopRight:    "+",
+	BottomLeft:  "+",
+	BottomRight: "+",
+	Horizontal:  "-",
+	Vertical:    "|",
+	TeeLeft:     "+",
+	TeeRight:    "+",
+	Lock:        "*",
+	Ellipsis:    "...",
 }
 
 // PromptAction represents what to do with the prompt result
@@ -46,6 +90,9 @@ const (
 	PromptSaveAs
 	PromptOpen
 	PromptConfirmNew
+	PromptConfirmOpen
+	PromptConfirmClose
+	PromptConfirmQuit
 	PromptConfirmOverwrite
 )
 
@@ -109,6 +156,7 @@ type Editor struct {
 	statusbar *ui.StatusBar
 	viewport  *ui.Viewport
 	styles    ui.Styles
+	box       BoxChars // Characters for drawing dialog boxes
 
 	// State
 	mode     Mode
@@ -126,6 +174,7 @@ type Editor struct {
 	promptInput     string       // User's input
 	promptAction    PromptAction // What to do with the result
 	pendingFilename string       // Filename pending confirmation (for overwrite)
+	pendingQuit     bool         // Whether to quit after current action
 
 	// Terminal state
 	pendingTitle string // Title to set on next render
@@ -146,6 +195,7 @@ type Editor struct {
 	fileBrowserEntries  []FileEntry // Directory contents
 	fileBrowserSelected int         // Selected index
 	fileBrowserScroll   int         // Scroll offset
+	fileBrowserError    string      // Error message to display in dialog
 
 	// Save As state
 	saveAsFilename string // Filename input for Save As dialog
@@ -168,6 +218,17 @@ func NewWithConfig(cfg *config.Config) *Editor {
 	styles := ui.DefaultStyles()
 	buf := NewBuffer()
 
+	// Determine ASCII mode: config override or auto-detect
+	asciiMode := !detectUTF8Support()
+	if cfg != nil && cfg.Editor.AsciiMode != nil {
+		asciiMode = *cfg.Editor.AsciiMode
+	}
+
+	box := UnicodeBoxChars
+	if asciiMode {
+		box = AsciiBoxChars
+	}
+
 	e := &Editor{
 		buffer:      buf,
 		cursor:      NewCursor(buf),
@@ -179,6 +240,7 @@ func NewWithConfig(cfg *config.Config) *Editor {
 		viewport:    ui.NewViewport(styles),
 		highlighter: syntax.New(""), // Initialize with no file
 		styles:      styles,
+		box:         box,
 		mode:        ModeNormal,
 		width:       80,
 		height:      24,
@@ -208,6 +270,18 @@ func NewWithConfig(cfg *config.Config) *Editor {
 	}
 
 	return e
+}
+
+// detectUTF8Support checks if the terminal likely supports UTF-8
+func detectUTF8Support() bool {
+	// Check LANG and LC_ALL environment variables for UTF-8
+	for _, env := range []string{"LC_ALL", "LC_CTYPE", "LANG"} {
+		val := strings.ToUpper(os.Getenv(env))
+		if strings.Contains(val, "UTF-8") || strings.Contains(val, "UTF8") {
+			return true
+		}
+	}
+	return false
 }
 
 // LoadFile loads a file into the editor
@@ -281,6 +355,11 @@ func (e *Editor) Init() tea.Cmd {
 
 // Update implements tea.Model
 func (e *Editor) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Check for pending quit (after user confirmed discard)
+	if e.pendingQuit {
+		return e, tea.Quit
+	}
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		e.width = msg.Width
@@ -378,7 +457,7 @@ func (e *Editor) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return e, nil
 
 	case tea.KeyCtrlQ:
-		return e, tea.Quit
+		return e, e.quitEditor()
 
 	case tea.KeyCtrlS:
 		e.SaveFile()
@@ -422,7 +501,7 @@ func (e *Editor) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return e, nil
 
 	case tea.KeyCtrlW:
-		e.toggleWordWrap()
+		e.closeFile()
 		return e, nil
 
 	case tea.KeyCtrlL:
@@ -704,7 +783,7 @@ func (e *Editor) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		e.SaveFile()
 		return e, nil
 	case "ctrl+q":
-		return e, tea.Quit
+		return e, e.quitEditor()
 	case "ctrl+z":
 		e.undo()
 		return e, nil
@@ -740,7 +819,7 @@ func (e *Editor) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		e.openFile()
 		return e, nil
 	case "ctrl+w":
-		e.toggleWordWrap()
+		e.closeFile()
 		return e, nil
 	case "ctrl+l":
 		e.toggleLineNumbers()
@@ -958,6 +1037,28 @@ func (e *Editor) executePrompt() {
 		} else {
 			e.statusbar.SetMessage("Cancelled", "info")
 		}
+
+	case PromptConfirmOpen:
+		if strings.ToLower(input) == "y" || strings.ToLower(input) == "yes" {
+			e.modified = false // Discard changes
+			e.showFileBrowser()
+		} else {
+			e.statusbar.SetMessage("Cancelled", "info")
+		}
+
+	case PromptConfirmClose:
+		if strings.ToLower(input) == "y" || strings.ToLower(input) == "yes" {
+			e.doCloseFile()
+		} else {
+			e.statusbar.SetMessage("Cancelled", "info")
+		}
+
+	case PromptConfirmQuit:
+		if strings.ToLower(input) == "y" || strings.ToLower(input) == "yes" {
+			e.pendingQuit = true
+		} else {
+			e.statusbar.SetMessage("Cancelled", "info")
+		}
 	}
 }
 
@@ -1001,18 +1102,25 @@ func (e *Editor) handleFileBrowserKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(e.fileBrowserEntries) > 0 && e.fileBrowserSelected < len(e.fileBrowserEntries) {
 			entry := e.fileBrowserEntries[e.fileBrowserSelected]
 			if entry.IsDir {
+				// Check if directory is readable
+				if !entry.Readable {
+					e.fileBrowserError = "Permission denied: " + entry.Name
+					return e, nil
+				}
 				// Enter directory
+				e.fileBrowserError = "" // Clear error
 				var newPath string
 				if entry.Name == ".." {
 					newPath = filepath.Dir(e.fileBrowserDir)
 				} else {
 					newPath = filepath.Join(e.fileBrowserDir, entry.Name)
 				}
-				e.loadDirectory(newPath)
+				e.loadDirectory(filepath.Clean(newPath))
 			} else {
 				// Open file
 				fullPath := filepath.Join(e.fileBrowserDir, entry.Name)
 				e.mode = ModeNormal
+				e.fileBrowserError = "" // Clear error
 				if err := e.LoadFile(fullPath); err != nil {
 					e.statusbar.SetMessage("Error: "+err.Error(), "error")
 				} else {
@@ -1024,7 +1132,7 @@ func (e *Editor) handleFileBrowserKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyBackspace:
 		// Go to parent directory
 		if e.fileBrowserDir != "/" {
-			newPath := filepath.Dir(e.fileBrowserDir)
+			newPath := filepath.Clean(filepath.Dir(e.fileBrowserDir))
 			e.loadDirectory(newPath)
 		}
 
@@ -1101,8 +1209,8 @@ func (e *Editor) fileBrowserVisibleHeight() int {
 	if boxHeight < 5 {
 		boxHeight = 5
 	}
-	// Subtract header (title + directory + separator) and footer (separator + help)
-	return boxHeight - 5
+	// Subtract header (title + directory + separator) and footer (separator + status + help)
+	return boxHeight - 6
 }
 
 // saveAsVisibleHeight returns the number of visible file entries in Save As
@@ -1114,8 +1222,8 @@ func (e *Editor) saveAsVisibleHeight() int {
 	if boxHeight < 5 {
 		boxHeight = 5
 	}
-	// Subtract header (title + directory + filename + separator) and footer (separator + help)
-	return boxHeight - 6
+	// Subtract header (title + directory + filename + separator) and footer (separator + status + help)
+	return boxHeight - 7
 }
 
 // handleSaveAsKey handles keyboard input in Save As mode
@@ -1137,24 +1245,31 @@ func (e *Editor) handleSaveAsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if len(e.fileBrowserEntries) > 0 && e.fileBrowserSelected >= 0 && e.fileBrowserSelected < len(e.fileBrowserEntries) {
 				entry := e.fileBrowserEntries[e.fileBrowserSelected]
 				if entry.IsDir {
+					// Check if directory is readable
+					if !entry.Readable {
+						e.fileBrowserError = "Permission denied: " + entry.Name
+						return e, nil
+					}
 					// Enter directory
+					e.fileBrowserError = "" // Clear error
 					var newPath string
 					if entry.Name == ".." {
 						newPath = filepath.Dir(e.fileBrowserDir)
 					} else {
 						newPath = filepath.Join(e.fileBrowserDir, entry.Name)
 					}
-					e.loadDirectory(newPath)
+					e.loadDirectory(filepath.Clean(newPath))
 				} else {
 					// Copy filename to input and switch focus to filename
 					e.saveAsFilename = entry.Name
 					e.saveAsFocusBrowser = false
+					e.fileBrowserError = "" // Clear error
 				}
 			}
 		} else {
 			// Focus on filename - save the file
 			if e.saveAsFilename == "" {
-				e.statusbar.SetMessage("Enter a filename", "error")
+				e.fileBrowserError = "Enter a filename"
 				return e, nil
 			}
 			fullPath := filepath.Join(e.fileBrowserDir, e.saveAsFilename)
@@ -1180,7 +1295,7 @@ func (e *Editor) handleSaveAsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if e.saveAsFocusBrowser {
 			// Go to parent directory
 			if e.fileBrowserDir != "/" {
-				newPath := filepath.Dir(e.fileBrowserDir)
+				newPath := filepath.Clean(filepath.Dir(e.fileBrowserDir))
 				e.loadDirectory(newPath)
 			}
 		} else {
@@ -1368,6 +1483,8 @@ func (e *Editor) executeAction(action ui.MenuAction) (tea.Model, tea.Cmd) {
 		e.newFile()
 	case ui.ActionOpen:
 		e.openFile()
+	case ui.ActionClose:
+		e.closeFile()
 	case ui.ActionSave:
 		e.SaveFile()
 	case ui.ActionSaveAs:
@@ -1375,7 +1492,7 @@ func (e *Editor) executeAction(action ui.MenuAction) (tea.Model, tea.Cmd) {
 	case ui.ActionRevert:
 		e.revertFile()
 	case ui.ActionExit:
-		return e, tea.Quit
+		return e, e.quitEditor()
 	case ui.ActionUndo:
 		e.undo()
 	case ui.ActionRedo:
@@ -1724,6 +1841,37 @@ func (e *Editor) doNewFile() {
 	e.statusbar.SetMessage("New file", "info")
 }
 
+// closeFile closes the current file (same as new, but different messaging)
+func (e *Editor) closeFile() {
+	if e.modified {
+		e.showPrompt("Unsaved changes. Discard? (y/n): ", PromptConfirmClose)
+		return
+	}
+	e.doCloseFile()
+}
+
+func (e *Editor) doCloseFile() {
+	e.buffer = NewBuffer()
+	e.cursor = NewCursor(e.buffer)
+	e.selection.Clear()
+	e.undoStack.Clear()
+	e.filename = ""
+	e.modified = false
+	e.highlighter.SetFile("")
+	e.updateTitle()
+	e.updateMenuState()
+	e.statusbar.SetMessage("File closed", "info")
+}
+
+// quitEditor exits the editor, checking for unsaved changes
+func (e *Editor) quitEditor() tea.Cmd {
+	if e.modified {
+		e.showPrompt("Unsaved changes. Quit anyway? (y/n): ", PromptConfirmQuit)
+		return nil
+	}
+	return tea.Quit
+}
+
 // updateTitle sets the terminal title
 func (e *Editor) updateTitle() {
 	e.pendingTitle = "festivus"
@@ -1748,8 +1896,7 @@ func (e *Editor) updateMenuState() {
 // openFile prompts for a filename to open
 func (e *Editor) openFile() {
 	if e.modified {
-		// TODO: Could add a two-step prompt here
-		e.statusbar.SetMessage("Save changes first (Ctrl+S)", "error")
+		e.showPrompt("Unsaved changes. Discard? (y/n): ", PromptConfirmOpen)
 		return
 	}
 	e.showFileBrowser()
@@ -1782,6 +1929,7 @@ func (e *Editor) showFileBrowser() {
 	e.fileBrowserDir = startDir
 	e.fileBrowserSelected = 0
 	e.fileBrowserScroll = 0
+	e.fileBrowserError = "" // Clear any previous error
 	e.loadDirectory(startDir)
 	e.mode = ModeFileBrowser
 }
@@ -1808,6 +1956,7 @@ func (e *Editor) showSaveAs() {
 	e.fileBrowserDir = startDir
 	e.fileBrowserSelected = 0
 	e.fileBrowserScroll = 0
+	e.fileBrowserError = "" // Clear any previous error
 	e.saveAsFocusBrowser = false // Start with focus on filename field
 	e.loadDirectory(startDir)
 	e.mode = ModeSaveAs
@@ -1817,37 +1966,51 @@ func (e *Editor) showSaveAs() {
 func (e *Editor) loadDirectory(path string) {
 	entries, err := os.ReadDir(path)
 	if err != nil {
-		e.statusbar.SetMessage("Error reading directory: "+err.Error(), "error")
+		e.fileBrowserError = "Cannot open: " + err.Error()
 		return
 	}
+
+	// Clear any previous error on success
+	e.fileBrowserError = ""
 
 	e.fileBrowserEntries = make([]FileEntry, 0, len(entries)+1)
 
 	// Add parent directory entry if not at root
 	if path != "/" {
 		e.fileBrowserEntries = append(e.fileBrowserEntries, FileEntry{
-			Name:  "..",
-			IsDir: true,
-			Size:  0,
+			Name:     "..",
+			IsDir:    true,
+			Size:     0,
+			Readable: true, // Parent is always readable (we came from there)
 		})
 	}
 
 	// Convert to FileEntry and separate dirs from files
+	// Note: We avoid calling entry.Info() for directories as it can hang
+	// on stale network mounts. Only call Info() for files (to get size).
 	var dirs, files []FileEntry
 	for _, entry := range entries {
-		info, err := entry.Info()
-		if err != nil {
-			continue
-		}
-		fe := FileEntry{
-			Name:  entry.Name(),
-			IsDir: entry.IsDir(),
-			Size:  info.Size(),
-		}
 		if entry.IsDir() {
-			dirs = append(dirs, fe)
+			// For directories, don't call Info() - it can hang on stale mounts
+			// We'll check readability when they try to enter
+			dirs = append(dirs, FileEntry{
+				Name:     entry.Name(),
+				IsDir:    true,
+				Size:     0,
+				Readable: true, // Assume readable, show error on enter
+			})
 		} else {
-			files = append(files, fe)
+			// For files, get info for size (less likely to hang)
+			info, err := entry.Info()
+			if err != nil {
+				continue
+			}
+			files = append(files, FileEntry{
+				Name:     entry.Name(),
+				IsDir:    false,
+				Size:     info.Size(),
+				Readable: true,
+			})
 		}
 	}
 
@@ -1863,7 +2026,7 @@ func (e *Editor) loadDirectory(path string) {
 	e.fileBrowserEntries = append(e.fileBrowserEntries, dirs...)
 	e.fileBrowserEntries = append(e.fileBrowserEntries, files...)
 
-	e.fileBrowserDir = path
+	e.fileBrowserDir = filepath.Clean(path)
 	e.fileBrowserSelected = 0
 	e.fileBrowserScroll = 0
 }
@@ -2270,6 +2433,7 @@ func (e *Editor) overlayHelpDialog(viewportContent string) string {
 		"  FILE",
 		"  Ctrl+N       New file",
 		"  Ctrl+O       Open file",
+		"  Ctrl+W       Close file",
 		"  Ctrl+S       Save file",
 		"  Ctrl+Q       Quit",
 		"",
@@ -2307,10 +2471,10 @@ func (e *Editor) overlayHelpDialog(viewportContent string) string {
 	title := " Keyboard Shortcuts "
 	titlePadLeft := (innerWidth - len(title)) / 2
 	titlePadRight := innerWidth - len(title) - titlePadLeft
-	helpLines = append(helpLines, "┌"+strings.Repeat("─", titlePadLeft)+title+strings.Repeat("─", titlePadRight)+"┐")
+	helpLines = append(helpLines, e.box.TopLeft+strings.Repeat(e.box.Horizontal, titlePadLeft)+title+strings.Repeat(e.box.Horizontal, titlePadRight)+e.box.TopRight)
 
 	// Empty line
-	helpLines = append(helpLines, "│"+strings.Repeat(" ", innerWidth)+"│")
+	helpLines = append(helpLines, e.box.Vertical+strings.Repeat(" ", innerWidth)+e.box.Vertical)
 
 	// Build two-column content
 	maxRows := len(leftCol)
@@ -2318,6 +2482,7 @@ func (e *Editor) overlayHelpDialog(viewportContent string) string {
 		maxRows = len(rightCol)
 	}
 
+	colSep := "  " + e.box.Vertical + " "
 	for i := 0; i < maxRows; i++ {
 		left := ""
 		right := ""
@@ -2327,25 +2492,25 @@ func (e *Editor) overlayHelpDialog(viewportContent string) string {
 		if i < len(rightCol) {
 			right = rightCol[i]
 		}
-		line := padText(left, colWidth) + "  │ " + padText(right, colWidth)
-		helpLines = append(helpLines, "│"+line+"│")
+		line := padText(left, colWidth) + colSep + padText(right, colWidth)
+		helpLines = append(helpLines, e.box.Vertical+line+e.box.Vertical)
 	}
 
 	// Empty line
-	helpLines = append(helpLines, "│"+strings.Repeat(" ", innerWidth)+"│")
+	helpLines = append(helpLines, e.box.Vertical+strings.Repeat(" ", innerWidth)+e.box.Vertical)
 
 	// Options section
-	helpLines = append(helpLines, "│"+centerText("OPTIONS: Ctrl+W Word Wrap │ Ctrl+L Line Numbers", innerWidth)+"│")
-	helpLines = append(helpLines, "│"+centerText("MENUS: F10 or Alt+F/E/O/H", innerWidth)+"│")
+	helpLines = append(helpLines, e.box.Vertical+centerText("OPTIONS: Ctrl+L Line Numbers", innerWidth)+e.box.Vertical)
+	helpLines = append(helpLines, e.box.Vertical+centerText("MENUS: F10 or Alt+F/E/O/H", innerWidth)+e.box.Vertical)
 
 	// Empty line
-	helpLines = append(helpLines, "│"+strings.Repeat(" ", innerWidth)+"│")
+	helpLines = append(helpLines, e.box.Vertical+strings.Repeat(" ", innerWidth)+e.box.Vertical)
 
 	// Footer
-	helpLines = append(helpLines, "│"+centerText("Press any key to continue...", innerWidth)+"│")
+	helpLines = append(helpLines, e.box.Vertical+centerText("Press any key to continue...", innerWidth)+e.box.Vertical)
 
 	// Bottom border
-	helpLines = append(helpLines, "└"+strings.Repeat("─", innerWidth)+"┘")
+	helpLines = append(helpLines, e.box.BottomLeft+strings.Repeat(e.box.Horizontal, innerWidth)+e.box.BottomRight)
 
 	boxHeight := len(helpLines)
 
@@ -2383,31 +2548,55 @@ func (e *Editor) overlayFileBrowser(viewportContent string) string {
 	// Box dimensions
 	boxWidth := 52
 	visibleHeight := e.fileBrowserVisibleHeight()
-	boxHeight := visibleHeight + 5 // +5 for header (3) and footer (2)
+	boxHeight := visibleHeight + 6 // +6 for header (3), status (1), and footer (2)
 
-	// Helper to pad/truncate text to box width (minus borders)
+	// Helper to pad/truncate text to exact display width (Unicode-aware)
 	innerWidth := boxWidth - 2 // Account for left and right borders
 	padText := func(s string, width int) string {
-		if len(s) > width {
-			return s[:width]
+		sw := runewidth.StringWidth(s)
+		if sw >= width {
+			return runewidth.Truncate(s, width, "")
 		}
-		return s + strings.Repeat(" ", width-len(s))
+		return s + strings.Repeat(" ", width-sw)
 	}
 	centerText := func(s string, width int) string {
-		if len(s) >= width {
-			return s[:width]
+		sw := runewidth.StringWidth(s)
+		if sw >= width {
+			return runewidth.Truncate(s, width, "")
 		}
-		padLeft := (width - len(s)) / 2
-		padRight := width - len(s) - padLeft
+		padLeft := (width - sw) / 2
+		padRight := width - sw - padLeft
 		return strings.Repeat(" ", padLeft) + s + strings.Repeat(" ", padRight)
+	}
+	// Truncate string to fit display width, with prefix
+	truncateWithPrefix := func(s string, width int, prefix string) string {
+		sw := runewidth.StringWidth(s)
+		if sw <= width {
+			return s
+		}
+		// Need to truncate from the start, showing "..." prefix
+		prefixWidth := runewidth.StringWidth(prefix)
+		targetWidth := width - prefixWidth
+		// Find how many runes from the end fit
+		runes := []rune(s)
+		endWidth := 0
+		startIdx := len(runes)
+		for i := len(runes) - 1; i >= 0 && endWidth < targetWidth; i-- {
+			rw := runewidth.RuneWidth(runes[i])
+			if endWidth+rw <= targetWidth {
+				endWidth += rw
+				startIdx = i
+			} else {
+				break
+			}
+		}
+		return prefix + string(runes[startIdx:])
 	}
 
 	// Truncate directory path if too long
 	dirDisplay := e.fileBrowserDir
 	maxDirLen := innerWidth - 12 // "Directory: " prefix
-	if len(dirDisplay) > maxDirLen {
-		dirDisplay = "..." + dirDisplay[len(dirDisplay)-maxDirLen+3:]
-	}
+	dirDisplay = truncateWithPrefix(dirDisplay, maxDirLen, e.box.Ellipsis)
 
 	// Build the dialog lines
 	var dialogLines []string
@@ -2416,52 +2605,79 @@ func (e *Editor) overlayFileBrowser(viewportContent string) string {
 	title := " Open File "
 	titlePadLeft := (boxWidth - 2 - len(title)) / 2
 	titlePadRight := boxWidth - 2 - len(title) - titlePadLeft
-	dialogLines = append(dialogLines, "┌"+strings.Repeat("─", titlePadLeft)+title+strings.Repeat("─", titlePadRight)+"┐")
+	dialogLines = append(dialogLines, e.box.TopLeft+strings.Repeat(e.box.Horizontal, titlePadLeft)+title+strings.Repeat(e.box.Horizontal, titlePadRight)+e.box.TopRight)
 
 	// Directory line
-	dialogLines = append(dialogLines, "│"+padText(" Directory: "+dirDisplay, innerWidth)+"│")
+	dialogLines = append(dialogLines, e.box.Vertical+padText(" Directory: "+dirDisplay, innerWidth)+e.box.Vertical)
 
 	// Separator
-	dialogLines = append(dialogLines, "├"+strings.Repeat("─", innerWidth)+"┤")
+	dialogLines = append(dialogLines, e.box.TeeLeft+strings.Repeat(e.box.Horizontal, innerWidth)+e.box.TeeRight)
 
 	// File list
+	lockWidth := runewidth.StringWidth(e.box.Lock)
 	for i := 0; i < visibleHeight; i++ {
 		idx := e.fileBrowserScroll + i
 		if idx < len(e.fileBrowserEntries) {
 			entry := e.fileBrowserEntries[idx]
+			// Truncate filename if needed (leave room for size column)
+			nameWidth := 36
+			name := entry.Name
+			if runewidth.StringWidth(name) > nameWidth {
+				name = runewidth.Truncate(name, nameWidth-1, e.box.Ellipsis)
+			}
+			// Pad name to fixed width
+			namePadded := name + strings.Repeat(" ", nameWidth-runewidth.StringWidth(name))
+
 			var line string
 			if entry.IsDir {
-				line = fmt.Sprintf(" %-36s %8s ", entry.Name, "<DIR>")
+				if !entry.Readable {
+					// Unreadable directory - show lock before name
+					line = " " + e.box.Lock + " " + namePadded + fmt.Sprintf("%6s ", "<DIR>")
+				} else {
+					line = strings.Repeat(" ", lockWidth+2) + namePadded + fmt.Sprintf("%6s ", "<DIR>")
+				}
 			} else {
-				line = fmt.Sprintf(" %-36s %8s ", entry.Name, formatFileSize(entry.Size))
+				line = strings.Repeat(" ", lockWidth+2) + namePadded + fmt.Sprintf("%6s ", formatFileSize(entry.Size))
 			}
-			// Truncate if needed
-			if len(line) > innerWidth {
-				line = line[:innerWidth]
-			} else {
-				line = padText(line, innerWidth)
-			}
-			// Highlight selected item
+			// Pad line to inner width using Unicode-aware width
+			line = padText(line, innerWidth)
+			// Style the line
 			if idx == e.fileBrowserSelected {
 				// Selected: white on blue
 				line = "\033[44;97m" + line + "\033[46;30m"
+			} else if entry.IsDir && !entry.Readable {
+				// Unreadable: dim/gray
+				line = "\033[2m" + line + "\033[22m"
 			}
-			dialogLines = append(dialogLines, "│"+line+"│")
+			dialogLines = append(dialogLines, e.box.Vertical+line+e.box.Vertical)
 		} else {
 			// Empty line
-			dialogLines = append(dialogLines, "│"+strings.Repeat(" ", innerWidth)+"│")
+			dialogLines = append(dialogLines, e.box.Vertical+strings.Repeat(" ", innerWidth)+e.box.Vertical)
 		}
 	}
 
 	// Separator
-	dialogLines = append(dialogLines, "├"+strings.Repeat("─", innerWidth)+"┤")
+	dialogLines = append(dialogLines, e.box.TeeLeft+strings.Repeat(e.box.Horizontal, innerWidth)+e.box.TeeRight)
+
+	// Status/error line
+	statusLine := ""
+	if e.fileBrowserError != "" {
+		statusLine = e.fileBrowserError
+		if len(statusLine) > innerWidth {
+			statusLine = statusLine[:innerWidth]
+		}
+		statusLine = "\033[91m" + padText(statusLine, innerWidth) + "\033[30m" // Red text
+	} else {
+		statusLine = padText("", innerWidth)
+	}
+	dialogLines = append(dialogLines, e.box.Vertical+statusLine+e.box.Vertical)
 
 	// Help line
 	helpText := "[Enter] Open  [Esc] Cancel  [Bksp] Parent"
-	dialogLines = append(dialogLines, "│"+centerText(helpText, innerWidth)+"│")
+	dialogLines = append(dialogLines, e.box.Vertical+centerText(helpText, innerWidth)+e.box.Vertical)
 
 	// Bottom border
-	dialogLines = append(dialogLines, "└"+strings.Repeat("─", innerWidth)+"┘")
+	dialogLines = append(dialogLines, e.box.BottomLeft+strings.Repeat(e.box.Horizontal, innerWidth)+e.box.BottomRight)
 
 	// Calculate centering
 	startX := (e.width - boxWidth) / 2
@@ -2497,31 +2713,55 @@ func (e *Editor) overlaySaveAs(viewportContent string) string {
 	// Box dimensions
 	boxWidth := 52
 	visibleHeight := e.saveAsVisibleHeight()
-	boxHeight := visibleHeight + 6 // +6 for header (4 with filename) and footer (2)
+	boxHeight := visibleHeight + 7 // +7 for header (4 with filename), status (1), and footer (2)
 
-	// Helper to pad/truncate text to box width (minus borders)
+	// Helper to pad/truncate text to exact display width (Unicode-aware)
 	innerWidth := boxWidth - 2 // Account for left and right borders
 	padText := func(s string, width int) string {
-		if len(s) > width {
-			return s[:width]
+		sw := runewidth.StringWidth(s)
+		if sw >= width {
+			return runewidth.Truncate(s, width, "")
 		}
-		return s + strings.Repeat(" ", width-len(s))
+		return s + strings.Repeat(" ", width-sw)
 	}
 	centerText := func(s string, width int) string {
-		if len(s) >= width {
-			return s[:width]
+		sw := runewidth.StringWidth(s)
+		if sw >= width {
+			return runewidth.Truncate(s, width, "")
 		}
-		padLeft := (width - len(s)) / 2
-		padRight := width - len(s) - padLeft
+		padLeft := (width - sw) / 2
+		padRight := width - sw - padLeft
 		return strings.Repeat(" ", padLeft) + s + strings.Repeat(" ", padRight)
+	}
+	// Truncate string to fit display width, with prefix
+	truncateWithPrefix := func(s string, width int, prefix string) string {
+		sw := runewidth.StringWidth(s)
+		if sw <= width {
+			return s
+		}
+		// Need to truncate from the start, showing "..." prefix
+		prefixWidth := runewidth.StringWidth(prefix)
+		targetWidth := width - prefixWidth
+		// Find how many runes from the end fit
+		runes := []rune(s)
+		endWidth := 0
+		startIdx := len(runes)
+		for i := len(runes) - 1; i >= 0 && endWidth < targetWidth; i-- {
+			rw := runewidth.RuneWidth(runes[i])
+			if endWidth+rw <= targetWidth {
+				endWidth += rw
+				startIdx = i
+			} else {
+				break
+			}
+		}
+		return prefix + string(runes[startIdx:])
 	}
 
 	// Truncate directory path if too long
 	dirDisplay := e.fileBrowserDir
 	maxDirLen := innerWidth - 12 // "Directory: " prefix
-	if len(dirDisplay) > maxDirLen {
-		dirDisplay = "..." + dirDisplay[len(dirDisplay)-maxDirLen+3:]
-	}
+	dirDisplay = truncateWithPrefix(dirDisplay, maxDirLen, e.box.Ellipsis)
 
 	// Build the dialog lines
 	var dialogLines []string
@@ -2530,22 +2770,25 @@ func (e *Editor) overlaySaveAs(viewportContent string) string {
 	title := " Save As "
 	titlePadLeft := (boxWidth - 2 - len(title)) / 2
 	titlePadRight := boxWidth - 2 - len(title) - titlePadLeft
-	dialogLines = append(dialogLines, "┌"+strings.Repeat("─", titlePadLeft)+title+strings.Repeat("─", titlePadRight)+"┐")
+	dialogLines = append(dialogLines, e.box.TopLeft+strings.Repeat(e.box.Horizontal, titlePadLeft)+title+strings.Repeat(e.box.Horizontal, titlePadRight)+e.box.TopRight)
 
 	// Directory line
-	dialogLines = append(dialogLines, "│"+padText(" Directory: "+dirDisplay, innerWidth)+"│")
+	dialogLines = append(dialogLines, e.box.Vertical+padText(" Directory: "+dirDisplay, innerWidth)+e.box.Vertical)
 
 	// Filename input line - show block cursor when focused
 	filenameDisplay := e.saveAsFilename
 	editAreaWidth := innerWidth - 12 // " Filename: " prefix (11) + 1 space
-	if len(filenameDisplay) > editAreaWidth-1 { // -1 for cursor
-		filenameDisplay = filenameDisplay[len(filenameDisplay)-editAreaWidth+1:]
+	fnWidth := runewidth.StringWidth(filenameDisplay)
+	if fnWidth > editAreaWidth-1 { // -1 for cursor
+		// Truncate from start to show end of filename
+		filenameDisplay = runewidth.TruncateLeft(filenameDisplay, fnWidth-(editAreaWidth-1), "")
+		fnWidth = runewidth.StringWidth(filenameDisplay)
 	}
 	var filenameLine string
 	if !e.saveAsFocusBrowser {
 		// Focused - show filename with block cursor at end
 		cursor := "\033[7m \033[27m" // Reverse video space (block cursor)
-		padding := editAreaWidth - len(filenameDisplay) - 1
+		padding := editAreaWidth - fnWidth - 1
 		if padding < 0 {
 			padding = 0
 		}
@@ -2554,42 +2797,69 @@ func (e *Editor) overlaySaveAs(viewportContent string) string {
 		// Not focused - just show filename
 		filenameLine = padText(" Filename: "+filenameDisplay, innerWidth)
 	}
-	dialogLines = append(dialogLines, "│"+filenameLine+"│")
+	dialogLines = append(dialogLines, e.box.Vertical+filenameLine+e.box.Vertical)
 
 	// Separator
-	dialogLines = append(dialogLines, "├"+strings.Repeat("─", innerWidth)+"┤")
+	dialogLines = append(dialogLines, e.box.TeeLeft+strings.Repeat(e.box.Horizontal, innerWidth)+e.box.TeeRight)
 
 	// File list
+	lockWidth := runewidth.StringWidth(e.box.Lock)
 	for i := 0; i < visibleHeight; i++ {
 		idx := e.fileBrowserScroll + i
 		if idx < len(e.fileBrowserEntries) {
 			entry := e.fileBrowserEntries[idx]
+			// Truncate filename if needed (leave room for size column)
+			nameWidth := 36
+			name := entry.Name
+			if runewidth.StringWidth(name) > nameWidth {
+				name = runewidth.Truncate(name, nameWidth-1, e.box.Ellipsis)
+			}
+			// Pad name to fixed width
+			namePadded := name + strings.Repeat(" ", nameWidth-runewidth.StringWidth(name))
+
 			var line string
 			if entry.IsDir {
-				line = fmt.Sprintf(" %-36s %8s ", entry.Name, "<DIR>")
+				if !entry.Readable {
+					// Unreadable directory - show lock before name
+					line = " " + e.box.Lock + " " + namePadded + fmt.Sprintf("%6s ", "<DIR>")
+				} else {
+					line = strings.Repeat(" ", lockWidth+2) + namePadded + fmt.Sprintf("%6s ", "<DIR>")
+				}
 			} else {
-				line = fmt.Sprintf(" %-36s %8s ", entry.Name, formatFileSize(entry.Size))
+				line = strings.Repeat(" ", lockWidth+2) + namePadded + fmt.Sprintf("%6s ", formatFileSize(entry.Size))
 			}
-			// Truncate if needed
-			if len(line) > innerWidth {
-				line = line[:innerWidth]
-			} else {
-				line = padText(line, innerWidth)
-			}
-			// Highlight selected item only when browser has focus
+			// Pad line to inner width using Unicode-aware width
+			line = padText(line, innerWidth)
+			// Style the line
 			if idx == e.fileBrowserSelected && e.saveAsFocusBrowser {
 				// Selected: white on blue
 				line = "\033[44;97m" + line + "\033[46;30m"
+			} else if entry.IsDir && !entry.Readable {
+				// Unreadable: dim/gray
+				line = "\033[2m" + line + "\033[22m"
 			}
-			dialogLines = append(dialogLines, "│"+line+"│")
+			dialogLines = append(dialogLines, e.box.Vertical+line+e.box.Vertical)
 		} else {
 			// Empty line
-			dialogLines = append(dialogLines, "│"+strings.Repeat(" ", innerWidth)+"│")
+			dialogLines = append(dialogLines, e.box.Vertical+strings.Repeat(" ", innerWidth)+e.box.Vertical)
 		}
 	}
 
 	// Separator
-	dialogLines = append(dialogLines, "├"+strings.Repeat("─", innerWidth)+"┤")
+	dialogLines = append(dialogLines, e.box.TeeLeft+strings.Repeat(e.box.Horizontal, innerWidth)+e.box.TeeRight)
+
+	// Status/error line
+	statusLine := ""
+	if e.fileBrowserError != "" {
+		statusLine = e.fileBrowserError
+		if runewidth.StringWidth(statusLine) > innerWidth {
+			statusLine = runewidth.Truncate(statusLine, innerWidth, "")
+		}
+		statusLine = "\033[91m" + padText(statusLine, innerWidth) + "\033[30m" // Red text
+	} else {
+		statusLine = padText("", innerWidth)
+	}
+	dialogLines = append(dialogLines, e.box.Vertical+statusLine+e.box.Vertical)
 
 	// Help line - changes based on focus
 	var helpText string
@@ -2598,10 +2868,10 @@ func (e *Editor) overlaySaveAs(viewportContent string) string {
 	} else {
 		helpText = "[Enter] Save  [Tab] Switch  [Esc] Cancel"
 	}
-	dialogLines = append(dialogLines, "│"+centerText(helpText, innerWidth)+"│")
+	dialogLines = append(dialogLines, e.box.Vertical+centerText(helpText, innerWidth)+e.box.Vertical)
 
 	// Bottom border
-	dialogLines = append(dialogLines, "└"+strings.Repeat("─", innerWidth)+"┘")
+	dialogLines = append(dialogLines, e.box.BottomLeft+strings.Repeat(e.box.Horizontal, innerWidth)+e.box.BottomRight)
 
 	// Calculate centering
 	startX := (e.width - boxWidth) / 2

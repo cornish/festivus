@@ -14,6 +14,7 @@ const (
 	// File menu
 	ActionNew
 	ActionOpen
+	ActionClose
 	ActionSave
 	ActionSaveAs
 	ActionRevert
@@ -69,6 +70,7 @@ func NewMenuBar(styles Styles) *MenuBar {
 				Items: []MenuItem{
 					{Label: "New", Shortcut: "Ctrl+N", HotKey: 'N', Action: ActionNew},
 					{Label: "Open", Shortcut: "Ctrl+O", HotKey: 'O', Action: ActionOpen},
+					{Label: "Close", Shortcut: "Ctrl+W", HotKey: 'C', Action: ActionClose},
 					{Label: "Save", Shortcut: "Ctrl+S", HotKey: 'S', Action: ActionSave},
 					{Label: "Save As", Shortcut: "", HotKey: 'A', Action: ActionSaveAs},
 					{Label: "Revert", Shortcut: "", HotKey: 'R', Action: ActionRevert},

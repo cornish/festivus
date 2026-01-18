@@ -15,28 +15,41 @@ const version = "0.1.0"
 func main() {
 	// Parse command line arguments
 	args := os.Args[1:]
+	var filename string
+	asciiMode := false
 
-	// Handle --version flag
+	// Handle flags
 	for _, arg := range args {
-		if arg == "--version" || arg == "-v" {
+		switch arg {
+		case "--version", "-v":
 			fmt.Printf("festivus %s\n", version)
 			os.Exit(0)
-		}
-		if arg == "--help" || arg == "-h" {
+		case "--help", "-h":
 			printHelp()
 			os.Exit(0)
+		case "--ascii":
+			asciiMode = true
+		default:
+			if filename == "" && !isFlag(arg) {
+				filename = arg
+			}
 		}
 	}
 
 	// Load configuration
 	cfg, _ := config.Load() // Ignore error, defaults are fine
 
+	// Command-line --ascii overrides config
+	if asciiMode {
+		t := true
+		cfg.Editor.AsciiMode = &t
+	}
+
 	// Create editor with config
 	e := editor.NewWithConfig(cfg)
 
 	// Load file if provided
-	if len(args) > 0 {
-		filename := args[0]
+	if filename != "" {
 		// Check if file exists
 		if _, err := os.Stat(filename); err == nil {
 			if err := e.LoadFile(filename); err != nil {
@@ -60,6 +73,10 @@ func main() {
 	}
 }
 
+func isFlag(s string) bool {
+	return len(s) > 0 && s[0] == '-'
+}
+
 func printHelp() {
 	fmt.Println("Festivus - A Text Editor for the Rest of Us")
 	fmt.Println()
@@ -68,11 +85,14 @@ func printHelp() {
 	fmt.Println("Options:")
 	fmt.Println("  -h, --help     Show this help message")
 	fmt.Println("  -v, --version  Show version information")
+	fmt.Println("  --ascii        Use ASCII characters for dialogs")
 	fmt.Println()
 	fmt.Println("Keyboard Shortcuts:")
+	fmt.Println("  Ctrl+N         New file")
+	fmt.Println("  Ctrl+O         Open file")
+	fmt.Println("  Ctrl+W         Close file")
 	fmt.Println("  Ctrl+S         Save file")
 	fmt.Println("  Ctrl+Q         Quit")
-	fmt.Println("  Ctrl+N         New file")
 	fmt.Println("  Ctrl+Z         Undo")
 	fmt.Println("  Ctrl+Y         Redo")
 	fmt.Println("  Ctrl+X         Cut")

@@ -14,9 +14,10 @@ type Config struct {
 
 // EditorConfig holds editor-specific settings
 type EditorConfig struct {
-	WordWrap        bool `toml:"word_wrap"`
-	LineNumbers     bool `toml:"line_numbers"`
-	SyntaxHighlight bool `toml:"syntax_highlight"`
+	WordWrap        bool  `toml:"word_wrap"`
+	LineNumbers     bool  `toml:"line_numbers"`
+	SyntaxHighlight bool  `toml:"syntax_highlight"`
+	AsciiMode       *bool `toml:"ascii_mode"` // nil = auto-detect, true/false = override
 }
 
 // DefaultConfig returns the default configuration
