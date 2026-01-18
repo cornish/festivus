@@ -291,11 +291,17 @@ func (e *Editor) LoadFile(filename string) error {
 		return err
 	}
 
+	// Convert to absolute path for consistent directory navigation
+	absPath, err := filepath.Abs(filename)
+	if err != nil {
+		absPath = filename // Fall back to original if Abs fails
+	}
+
 	e.buffer = NewBufferFromString(string(content))
 	e.cursor = NewCursor(e.buffer)
 	e.selection.Clear()
 	e.undoStack.Clear()
-	e.filename = filename
+	e.filename = absPath
 	e.modified = false
 	e.updateTitle()
 	e.updateMenuState()
@@ -1090,7 +1096,6 @@ func (e *Editor) handleFindKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // handleFileBrowserKey handles keyboard input in file browser mode
 func (e *Editor) handleFileBrowserKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// Calculate visible height for the file list (box height minus header/footer)
 	visibleHeight := e.fileBrowserVisibleHeight()
 
 	switch msg.Type {
@@ -1099,101 +1104,43 @@ func (e *Editor) handleFileBrowserKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		e.statusbar.SetMessage("Cancelled", "info")
 
 	case tea.KeyEnter:
-		if len(e.fileBrowserEntries) > 0 && e.fileBrowserSelected < len(e.fileBrowserEntries) {
-			entry := e.fileBrowserEntries[e.fileBrowserSelected]
-			if entry.IsDir {
-				// Check if directory is readable
-				if !entry.Readable {
-					e.fileBrowserError = "Permission denied: " + entry.Name
-					return e, nil
-				}
-				// Enter directory
-				e.fileBrowserError = "" // Clear error
-				var newPath string
-				if entry.Name == ".." {
-					newPath = filepath.Dir(e.fileBrowserDir)
-				} else {
-					newPath = filepath.Join(e.fileBrowserDir, entry.Name)
-				}
-				e.loadDirectory(filepath.Clean(newPath))
-			} else {
-				// Open file
-				fullPath := filepath.Join(e.fileBrowserDir, entry.Name)
-				e.mode = ModeNormal
-				e.fileBrowserError = "" // Clear error
-				if err := e.LoadFile(fullPath); err != nil {
-					e.statusbar.SetMessage("Error: "+err.Error(), "error")
-				} else {
-					e.statusbar.SetMessage("Opened: "+fullPath, "success")
+		if !e.browserEnterDirectory() {
+			// Not a directory - open the file
+			if e.fileBrowserSelected >= 0 && e.fileBrowserSelected < len(e.fileBrowserEntries) {
+				entry := e.fileBrowserEntries[e.fileBrowserSelected]
+				if !entry.IsDir {
+					fullPath := filepath.Join(e.fileBrowserDir, entry.Name)
+					e.mode = ModeNormal
+					e.fileBrowserError = ""
+					if err := e.LoadFile(fullPath); err != nil {
+						e.statusbar.SetMessage("Error: "+err.Error(), "error")
+					} else {
+						e.statusbar.SetMessage("Opened: "+fullPath, "success")
+					}
 				}
 			}
 		}
 
 	case tea.KeyBackspace:
-		// Go to parent directory
-		if e.fileBrowserDir != "/" {
-			newPath := filepath.Clean(filepath.Dir(e.fileBrowserDir))
-			e.loadDirectory(newPath)
-		}
+		e.browserGoToParent()
 
 	case tea.KeyUp:
-		if e.fileBrowserSelected > 0 {
-			e.fileBrowserSelected--
-			// Scroll up if needed
-			if e.fileBrowserSelected < e.fileBrowserScroll {
-				e.fileBrowserScroll = e.fileBrowserSelected
-			}
-		}
+		e.browserNavigateUp()
 
 	case tea.KeyDown:
-		if e.fileBrowserSelected < len(e.fileBrowserEntries)-1 {
-			e.fileBrowserSelected++
-			// Scroll down if needed
-			if e.fileBrowserSelected >= e.fileBrowserScroll+visibleHeight {
-				e.fileBrowserScroll = e.fileBrowserSelected - visibleHeight + 1
-			}
-		}
+		e.browserNavigateDown(visibleHeight)
 
 	case tea.KeyHome:
-		e.fileBrowserSelected = 0
-		e.fileBrowserScroll = 0
+		e.browserNavigateHome()
 
 	case tea.KeyEnd:
-		e.fileBrowserSelected = len(e.fileBrowserEntries) - 1
-		if e.fileBrowserSelected < 0 {
-			e.fileBrowserSelected = 0
-		}
-		// Adjust scroll to show last item
-		if e.fileBrowserSelected >= visibleHeight {
-			e.fileBrowserScroll = e.fileBrowserSelected - visibleHeight + 1
-		}
+		e.browserNavigateEnd(visibleHeight)
 
 	case tea.KeyPgUp:
-		e.fileBrowserSelected -= visibleHeight
-		if e.fileBrowserSelected < 0 {
-			e.fileBrowserSelected = 0
-		}
-		e.fileBrowserScroll -= visibleHeight
-		if e.fileBrowserScroll < 0 {
-			e.fileBrowserScroll = 0
-		}
+		e.browserNavigatePgUp(visibleHeight)
 
 	case tea.KeyPgDown:
-		e.fileBrowserSelected += visibleHeight
-		if e.fileBrowserSelected >= len(e.fileBrowserEntries) {
-			e.fileBrowserSelected = len(e.fileBrowserEntries) - 1
-		}
-		if e.fileBrowserSelected < 0 {
-			e.fileBrowserSelected = 0
-		}
-		e.fileBrowserScroll += visibleHeight
-		maxScroll := len(e.fileBrowserEntries) - visibleHeight
-		if maxScroll < 0 {
-			maxScroll = 0
-		}
-		if e.fileBrowserScroll > maxScroll {
-			e.fileBrowserScroll = maxScroll
-		}
+		e.browserNavigatePgDown(visibleHeight)
 	}
 
 	return e, nil
@@ -1211,6 +1158,109 @@ func (e *Editor) fileBrowserVisibleHeight() int {
 	}
 	// Subtract header (title + directory + separator) and footer (separator + status + help)
 	return boxHeight - 6
+}
+
+// Shared file browser navigation functions
+
+// browserNavigateUp moves selection up one item
+func (e *Editor) browserNavigateUp() {
+	if e.fileBrowserSelected > 0 {
+		e.fileBrowserSelected--
+		if e.fileBrowserSelected < e.fileBrowserScroll {
+			e.fileBrowserScroll = e.fileBrowserSelected
+		}
+	}
+}
+
+// browserNavigateDown moves selection down one item
+func (e *Editor) browserNavigateDown(visibleHeight int) {
+	if e.fileBrowserSelected < len(e.fileBrowserEntries)-1 {
+		e.fileBrowserSelected++
+		if e.fileBrowserSelected >= e.fileBrowserScroll+visibleHeight {
+			e.fileBrowserScroll = e.fileBrowserSelected - visibleHeight + 1
+		}
+	}
+}
+
+// browserNavigateHome moves selection to first item
+func (e *Editor) browserNavigateHome() {
+	e.fileBrowserSelected = 0
+	e.fileBrowserScroll = 0
+}
+
+// browserNavigateEnd moves selection to last item
+func (e *Editor) browserNavigateEnd(visibleHeight int) {
+	e.fileBrowserSelected = len(e.fileBrowserEntries) - 1
+	if e.fileBrowserSelected < 0 {
+		e.fileBrowserSelected = 0
+	}
+	if e.fileBrowserSelected >= visibleHeight {
+		e.fileBrowserScroll = e.fileBrowserSelected - visibleHeight + 1
+	}
+}
+
+// browserNavigatePgUp moves selection up by a page
+func (e *Editor) browserNavigatePgUp(visibleHeight int) {
+	e.fileBrowserSelected -= visibleHeight
+	if e.fileBrowserSelected < 0 {
+		e.fileBrowserSelected = 0
+	}
+	e.fileBrowserScroll -= visibleHeight
+	if e.fileBrowserScroll < 0 {
+		e.fileBrowserScroll = 0
+	}
+}
+
+// browserNavigatePgDown moves selection down by a page
+func (e *Editor) browserNavigatePgDown(visibleHeight int) {
+	e.fileBrowserSelected += visibleHeight
+	if e.fileBrowserSelected >= len(e.fileBrowserEntries) {
+		e.fileBrowserSelected = len(e.fileBrowserEntries) - 1
+	}
+	if e.fileBrowserSelected < 0 {
+		e.fileBrowserSelected = 0
+	}
+	e.fileBrowserScroll += visibleHeight
+	maxScroll := len(e.fileBrowserEntries) - visibleHeight
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	if e.fileBrowserScroll > maxScroll {
+		e.fileBrowserScroll = maxScroll
+	}
+}
+
+// browserGoToParent navigates to parent directory
+func (e *Editor) browserGoToParent() {
+	if e.fileBrowserDir != "/" {
+		newPath := filepath.Clean(filepath.Dir(e.fileBrowserDir))
+		e.loadDirectory(newPath)
+	}
+}
+
+// browserEnterDirectory enters the selected directory if it's a readable directory
+// Returns true if navigation occurred, false otherwise
+func (e *Editor) browserEnterDirectory() bool {
+	if len(e.fileBrowserEntries) == 0 || e.fileBrowserSelected < 0 || e.fileBrowserSelected >= len(e.fileBrowserEntries) {
+		return false
+	}
+	entry := e.fileBrowserEntries[e.fileBrowserSelected]
+	if !entry.IsDir {
+		return false
+	}
+	if !entry.Readable {
+		e.fileBrowserError = "Permission denied: " + entry.Name
+		return true // Handled, but with error
+	}
+	e.fileBrowserError = "" // Clear error
+	var newPath string
+	if entry.Name == ".." {
+		newPath = filepath.Dir(e.fileBrowserDir)
+	} else {
+		newPath = filepath.Join(e.fileBrowserDir, entry.Name)
+	}
+	e.loadDirectory(filepath.Clean(newPath))
+	return true
 }
 
 // saveAsVisibleHeight returns the number of visible file entries in Save As
@@ -1242,28 +1292,15 @@ func (e *Editor) handleSaveAsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyEnter:
 		if e.saveAsFocusBrowser {
 			// Focus on browser - handle directory navigation or file selection
-			if len(e.fileBrowserEntries) > 0 && e.fileBrowserSelected >= 0 && e.fileBrowserSelected < len(e.fileBrowserEntries) {
-				entry := e.fileBrowserEntries[e.fileBrowserSelected]
-				if entry.IsDir {
-					// Check if directory is readable
-					if !entry.Readable {
-						e.fileBrowserError = "Permission denied: " + entry.Name
-						return e, nil
+			if !e.browserEnterDirectory() {
+				// Not a directory - copy filename to input
+				if e.fileBrowserSelected >= 0 && e.fileBrowserSelected < len(e.fileBrowserEntries) {
+					entry := e.fileBrowserEntries[e.fileBrowserSelected]
+					if !entry.IsDir {
+						e.saveAsFilename = entry.Name
+						e.saveAsFocusBrowser = false
+						e.fileBrowserError = ""
 					}
-					// Enter directory
-					e.fileBrowserError = "" // Clear error
-					var newPath string
-					if entry.Name == ".." {
-						newPath = filepath.Dir(e.fileBrowserDir)
-					} else {
-						newPath = filepath.Join(e.fileBrowserDir, entry.Name)
-					}
-					e.loadDirectory(filepath.Clean(newPath))
-				} else {
-					// Copy filename to input and switch focus to filename
-					e.saveAsFilename = entry.Name
-					e.saveAsFocusBrowser = false
-					e.fileBrowserError = "" // Clear error
 				}
 			}
 		} else {
@@ -1293,11 +1330,7 @@ func (e *Editor) handleSaveAsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyBackspace:
 		if e.saveAsFocusBrowser {
-			// Go to parent directory
-			if e.fileBrowserDir != "/" {
-				newPath := filepath.Clean(filepath.Dir(e.fileBrowserDir))
-				e.loadDirectory(newPath)
-			}
+			e.browserGoToParent()
 		} else {
 			// Delete from filename
 			if len(e.saveAsFilename) > 0 {
@@ -1307,12 +1340,7 @@ func (e *Editor) handleSaveAsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyUp:
 		if e.saveAsFocusBrowser {
-			if e.fileBrowserSelected > 0 {
-				e.fileBrowserSelected--
-				if e.fileBrowserSelected < e.fileBrowserScroll {
-					e.fileBrowserScroll = e.fileBrowserSelected
-				}
-			}
+			e.browserNavigateUp()
 		} else {
 			// Switch focus to browser
 			e.saveAsFocusBrowser = true
@@ -1320,12 +1348,7 @@ func (e *Editor) handleSaveAsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyDown:
 		if e.saveAsFocusBrowser {
-			if e.fileBrowserSelected < len(e.fileBrowserEntries)-1 {
-				e.fileBrowserSelected++
-				if e.fileBrowserSelected >= e.fileBrowserScroll+visibleHeight {
-					e.fileBrowserScroll = e.fileBrowserSelected - visibleHeight + 1
-				}
-			}
+			e.browserNavigateDown(visibleHeight)
 		} else {
 			// Switch focus to browser
 			e.saveAsFocusBrowser = true
@@ -1333,50 +1356,22 @@ func (e *Editor) handleSaveAsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyHome:
 		if e.saveAsFocusBrowser {
-			e.fileBrowserSelected = 0
-			e.fileBrowserScroll = 0
+			e.browserNavigateHome()
 		}
 
 	case tea.KeyEnd:
 		if e.saveAsFocusBrowser {
-			e.fileBrowserSelected = len(e.fileBrowserEntries) - 1
-			if e.fileBrowserSelected < 0 {
-				e.fileBrowserSelected = 0
-			}
-			if e.fileBrowserSelected >= visibleHeight {
-				e.fileBrowserScroll = e.fileBrowserSelected - visibleHeight + 1
-			}
+			e.browserNavigateEnd(visibleHeight)
 		}
 
 	case tea.KeyPgUp:
 		if e.saveAsFocusBrowser {
-			e.fileBrowserSelected -= visibleHeight
-			if e.fileBrowserSelected < 0 {
-				e.fileBrowserSelected = 0
-			}
-			e.fileBrowserScroll -= visibleHeight
-			if e.fileBrowserScroll < 0 {
-				e.fileBrowserScroll = 0
-			}
+			e.browserNavigatePgUp(visibleHeight)
 		}
 
 	case tea.KeyPgDown:
 		if e.saveAsFocusBrowser {
-			e.fileBrowserSelected += visibleHeight
-			if e.fileBrowserSelected >= len(e.fileBrowserEntries) {
-				e.fileBrowserSelected = len(e.fileBrowserEntries) - 1
-			}
-			if e.fileBrowserSelected < 0 {
-				e.fileBrowserSelected = 0
-			}
-			e.fileBrowserScroll += visibleHeight
-			maxScroll := len(e.fileBrowserEntries) - visibleHeight
-			if maxScroll < 0 {
-				maxScroll = 0
-			}
-			if e.fileBrowserScroll > maxScroll {
-				e.fileBrowserScroll = maxScroll
-			}
+			e.browserNavigatePgDown(visibleHeight)
 		}
 
 	case tea.KeyRunes:
@@ -2234,8 +2229,13 @@ func (e *Editor) View() string {
 
 // SetFilename sets the filename for the editor
 func (e *Editor) SetFilename(filename string) {
-	e.filename = filename
-	e.highlighter.SetFile(filename) // Update syntax highlighter
+	// Convert to absolute path for consistent directory navigation
+	absPath, err := filepath.Abs(filename)
+	if err != nil {
+		absPath = filename // Fall back to original if Abs fails
+	}
+	e.filename = absPath
+	e.highlighter.SetFile(absPath) // Update syntax highlighter
 }
 
 // overlayLineAt overlays the dropdown line on top of the viewport line at the given offset,
