@@ -117,14 +117,33 @@ func (e *Editor) overlayAboutDialog(viewportContent string) string {
 		quoteLines = []string{centerText(line1), centerText(line2)}
 	}
 
-	aboutLines := []string{
-		strings.Repeat(" ", boxWidth),
-		" ███████╗███████╗███████╗████████╗██╗██╗   ██╗██╗   ██╗███████╗ ",
-		" ██╔════╝██╔════╝██╔════╝╚══██╔══╝██║██║   ██║██║   ██║██╔════╝ ",
-		" █████╗  █████╗  ███████╗   ██║   ██║██║   ██║██║   ██║███████╗ ",
-		" ██╔══╝  ██╔══╝  ╚════██║   ██║   ██║╚██╗ ██╔╝██║   ██║╚════██║ ",
-		" ██║     ███████╗███████║   ██║   ██║ ╚████╔╝ ╚██████╔╝███████║ ",
-		" ╚═╝     ╚══════╝╚══════╝   ╚═╝   ╚═╝  ╚═══╝   ╚═════╝ ╚══════╝ ",
+	// Choose logo based on ASCII mode
+	var logoLines []string
+	if e.box.Lock == "*" {
+		// ASCII mode - use asterisk art (64 chars wide to match boxWidth)
+		logoLines = []string{
+			"      *****  *****   ****  *****  ***  *   *  *   *   ****      ",
+			"      *      *      *        *     *   *   *  *   *  *          ",
+			"      ****   ****    ***     *     *   *   *  *   *   ***       ",
+			"      *      *          *    *     *    * *   *   *      *      ",
+			"      *      *****  ****     *    ***    *     ***   ****       ",
+			"                                                                ",
+		}
+	} else {
+		// Unicode mode - use block art
+		logoLines = []string{
+			" ███████╗███████╗███████╗████████╗██╗██╗   ██╗██╗   ██╗███████╗ ",
+			" ██╔════╝██╔════╝██╔════╝╚══██╔══╝██║██║   ██║██║   ██║██╔════╝ ",
+			" █████╗  █████╗  ███████╗   ██║   ██║██║   ██║██║   ██║███████╗ ",
+			" ██╔══╝  ██╔══╝  ╚════██║   ██║   ██║╚██╗ ██╔╝██║   ██║╚════██║ ",
+			" ██║     ███████╗███████║   ██║   ██║ ╚████╔╝ ╚██████╔╝███████║ ",
+			" ╚═╝     ╚══════╝╚══════╝   ╚═╝   ╚═╝  ╚═══╝   ╚═════╝ ╚══════╝ ",
+		}
+	}
+
+	aboutLines := []string{strings.Repeat(" ", boxWidth)}
+	aboutLines = append(aboutLines, logoLines...)
+	aboutLines = append(aboutLines,
 		strings.Repeat(" ", boxWidth),
 		centerText("A Text Editor for the Rest of Us"),
 		strings.Repeat(" ", boxWidth),
@@ -132,7 +151,7 @@ func (e *Editor) overlayAboutDialog(viewportContent string) string {
 		centerText("github.com/cornish/festivus"),
 		centerText("Copyright (c) 2025"),
 		strings.Repeat(" ", boxWidth),
-	}
+	)
 	aboutLines = append(aboutLines, quoteLines...)
 	aboutLines = append(aboutLines,
 		strings.Repeat(" ", boxWidth),
