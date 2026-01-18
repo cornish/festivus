@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -23,7 +25,15 @@ const (
 	ModeFind
 	ModePrompt
 	ModeAbout
+	ModeFileBrowser
 )
+
+// FileEntry represents a file or directory in the file browser
+type FileEntry struct {
+	Name  string
+	IsDir bool
+	Size  int64
+}
 
 // PromptAction represents what to do with the prompt result
 type PromptAction int
@@ -127,6 +137,12 @@ type Editor struct {
 
 	// About dialog state
 	aboutQuote string
+
+	// File browser state
+	fileBrowserDir      string      // Current directory
+	fileBrowserEntries  []FileEntry // Directory contents
+	fileBrowserSelected int         // Selected index
+	fileBrowserScroll   int         // Scroll offset
 
 	// Configuration
 	config *config.Config
@@ -309,6 +325,11 @@ func (e *Editor) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return e, nil
 	}
 
+	// Handle file browser mode
+	if e.mode == ModeFileBrowser {
+		return e.handleFileBrowserKey(msg)
+	}
+
 	// Clear status message on any key
 	e.statusbar.ClearMessage()
 
@@ -361,6 +382,10 @@ func (e *Editor) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyCtrlN:
 		e.newFile()
+		return e, nil
+
+	case tea.KeyCtrlO:
+		e.openFile()
 		return e, nil
 
 	case tea.KeyCtrlHome:
@@ -639,6 +664,9 @@ func (e *Editor) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+n":
 		e.newFile()
 		return e, nil
+	case "ctrl+o":
+		e.openFile()
+		return e, nil
 
 	// Word movement
 	case "ctrl+left":
@@ -868,6 +896,124 @@ func (e *Editor) handleFindKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	return e, nil
+}
+
+// handleFileBrowserKey handles keyboard input in file browser mode
+func (e *Editor) handleFileBrowserKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Calculate visible height for the file list (box height minus header/footer)
+	visibleHeight := e.fileBrowserVisibleHeight()
+
+	switch msg.Type {
+	case tea.KeyEsc:
+		e.mode = ModeNormal
+		e.statusbar.SetMessage("Cancelled", "info")
+
+	case tea.KeyEnter:
+		if len(e.fileBrowserEntries) > 0 && e.fileBrowserSelected < len(e.fileBrowserEntries) {
+			entry := e.fileBrowserEntries[e.fileBrowserSelected]
+			if entry.IsDir {
+				// Enter directory
+				var newPath string
+				if entry.Name == ".." {
+					newPath = filepath.Dir(e.fileBrowserDir)
+				} else {
+					newPath = filepath.Join(e.fileBrowserDir, entry.Name)
+				}
+				e.loadDirectory(newPath)
+			} else {
+				// Open file
+				fullPath := filepath.Join(e.fileBrowserDir, entry.Name)
+				e.mode = ModeNormal
+				if err := e.LoadFile(fullPath); err != nil {
+					e.statusbar.SetMessage("Error: "+err.Error(), "error")
+				} else {
+					e.statusbar.SetMessage("Opened: "+fullPath, "success")
+				}
+			}
+		}
+
+	case tea.KeyBackspace:
+		// Go to parent directory
+		if e.fileBrowserDir != "/" {
+			newPath := filepath.Dir(e.fileBrowserDir)
+			e.loadDirectory(newPath)
+		}
+
+	case tea.KeyUp:
+		if e.fileBrowserSelected > 0 {
+			e.fileBrowserSelected--
+			// Scroll up if needed
+			if e.fileBrowserSelected < e.fileBrowserScroll {
+				e.fileBrowserScroll = e.fileBrowserSelected
+			}
+		}
+
+	case tea.KeyDown:
+		if e.fileBrowserSelected < len(e.fileBrowserEntries)-1 {
+			e.fileBrowserSelected++
+			// Scroll down if needed
+			if e.fileBrowserSelected >= e.fileBrowserScroll+visibleHeight {
+				e.fileBrowserScroll = e.fileBrowserSelected - visibleHeight + 1
+			}
+		}
+
+	case tea.KeyHome:
+		e.fileBrowserSelected = 0
+		e.fileBrowserScroll = 0
+
+	case tea.KeyEnd:
+		e.fileBrowserSelected = len(e.fileBrowserEntries) - 1
+		if e.fileBrowserSelected < 0 {
+			e.fileBrowserSelected = 0
+		}
+		// Adjust scroll to show last item
+		if e.fileBrowserSelected >= visibleHeight {
+			e.fileBrowserScroll = e.fileBrowserSelected - visibleHeight + 1
+		}
+
+	case tea.KeyPgUp:
+		e.fileBrowserSelected -= visibleHeight
+		if e.fileBrowserSelected < 0 {
+			e.fileBrowserSelected = 0
+		}
+		e.fileBrowserScroll -= visibleHeight
+		if e.fileBrowserScroll < 0 {
+			e.fileBrowserScroll = 0
+		}
+
+	case tea.KeyPgDown:
+		e.fileBrowserSelected += visibleHeight
+		if e.fileBrowserSelected >= len(e.fileBrowserEntries) {
+			e.fileBrowserSelected = len(e.fileBrowserEntries) - 1
+		}
+		if e.fileBrowserSelected < 0 {
+			e.fileBrowserSelected = 0
+		}
+		e.fileBrowserScroll += visibleHeight
+		maxScroll := len(e.fileBrowserEntries) - visibleHeight
+		if maxScroll < 0 {
+			maxScroll = 0
+		}
+		if e.fileBrowserScroll > maxScroll {
+			e.fileBrowserScroll = maxScroll
+		}
+	}
+
+	return e, nil
+}
+
+// fileBrowserVisibleHeight returns the number of visible file entries in the browser
+func (e *Editor) fileBrowserVisibleHeight() int {
+	// Box height is based on viewport, minus borders and header/footer
+	boxHeight := e.viewport.Height() - 4 // Reserve some margin
+	if boxHeight > 20 {
+		boxHeight = 20 // Cap at reasonable size
+	}
+	if boxHeight < 5 {
+		boxHeight = 5
+	}
+	// Subtract header (title + directory + separator) and footer (separator + help)
+	return boxHeight - 5
 }
 
 // handleMouse handles mouse input
@@ -1313,7 +1459,7 @@ func (e *Editor) openFile() {
 		e.statusbar.SetMessage("Save changes first (Ctrl+S)", "error")
 		return
 	}
-	e.showPrompt("Open file: ", PromptOpen)
+	e.showFileBrowser()
 }
 
 // revertFile reloads the file from disk
@@ -1326,6 +1472,98 @@ func (e *Editor) revertFile() {
 		e.statusbar.SetMessage("Error: "+err.Error(), "error")
 	} else {
 		e.statusbar.SetMessage("Reverted to saved version", "success")
+	}
+}
+
+// showFileBrowser initializes and displays the file browser dialog
+func (e *Editor) showFileBrowser() {
+	// Start in current working directory, or home directory as fallback
+	startDir, err := os.Getwd()
+	if err != nil {
+		startDir, err = os.UserHomeDir()
+		if err != nil {
+			startDir = "/"
+		}
+	}
+
+	e.fileBrowserDir = startDir
+	e.fileBrowserSelected = 0
+	e.fileBrowserScroll = 0
+	e.loadDirectory(startDir)
+	e.mode = ModeFileBrowser
+}
+
+// loadDirectory reads the contents of a directory and populates the file browser
+func (e *Editor) loadDirectory(path string) {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		e.statusbar.SetMessage("Error reading directory: "+err.Error(), "error")
+		return
+	}
+
+	e.fileBrowserEntries = make([]FileEntry, 0, len(entries)+1)
+
+	// Add parent directory entry if not at root
+	if path != "/" {
+		e.fileBrowserEntries = append(e.fileBrowserEntries, FileEntry{
+			Name:  "..",
+			IsDir: true,
+			Size:  0,
+		})
+	}
+
+	// Convert to FileEntry and separate dirs from files
+	var dirs, files []FileEntry
+	for _, entry := range entries {
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		fe := FileEntry{
+			Name:  entry.Name(),
+			IsDir: entry.IsDir(),
+			Size:  info.Size(),
+		}
+		if entry.IsDir() {
+			dirs = append(dirs, fe)
+		} else {
+			files = append(files, fe)
+		}
+	}
+
+	// Sort directories and files alphabetically (case-insensitive)
+	sort.Slice(dirs, func(i, j int) bool {
+		return strings.ToLower(dirs[i].Name) < strings.ToLower(dirs[j].Name)
+	})
+	sort.Slice(files, func(i, j int) bool {
+		return strings.ToLower(files[i].Name) < strings.ToLower(files[j].Name)
+	})
+
+	// Add directories first, then files
+	e.fileBrowserEntries = append(e.fileBrowserEntries, dirs...)
+	e.fileBrowserEntries = append(e.fileBrowserEntries, files...)
+
+	e.fileBrowserDir = path
+	e.fileBrowserSelected = 0
+	e.fileBrowserScroll = 0
+}
+
+// formatFileSize formats a file size in human-readable format
+func formatFileSize(size int64) string {
+	const (
+		KB = 1024
+		MB = KB * 1024
+		GB = MB * 1024
+	)
+	switch {
+	case size >= GB:
+		return fmt.Sprintf("%.1f GB", float64(size)/float64(GB))
+	case size >= MB:
+		return fmt.Sprintf("%.1f MB", float64(size)/float64(MB))
+	case size >= KB:
+		return fmt.Sprintf("%.1f KB", float64(size)/float64(KB))
+	default:
+		return fmt.Sprintf("%d B", size)
 	}
 }
 
@@ -1436,6 +1674,11 @@ func (e *Editor) View() string {
 	// If about dialog is open, overlay it centered on the viewport
 	if e.mode == ModeAbout {
 		viewportContent = e.overlayAboutDialog(viewportContent)
+	}
+
+	// If file browser is open, overlay it centered on the viewport
+	if e.mode == ModeFileBrowser {
+		viewportContent = e.overlayFileBrowser(viewportContent)
 	}
 
 	sb.WriteString(viewportContent)
@@ -1638,6 +1881,120 @@ func (e *Editor) overlayAboutDialog(viewportContent string) string {
 			var styledLine strings.Builder
 			styledLine.WriteString("\033[46;30m") // Cyan bg, black text
 			styledLine.WriteString(aboutLine)
+			styledLine.WriteString("\033[0m")
+
+			// Overlay on viewport line
+			viewportLines[viewportY] = overlayLineAt(styledLine.String(), viewportLines[viewportY], startX)
+		}
+	}
+
+	return strings.Join(viewportLines, "\n")
+}
+
+// overlayFileBrowser overlays the file browser dialog centered on the viewport
+func (e *Editor) overlayFileBrowser(viewportContent string) string {
+	// Box dimensions
+	boxWidth := 52
+	visibleHeight := e.fileBrowserVisibleHeight()
+	boxHeight := visibleHeight + 5 // +5 for header (3) and footer (2)
+
+	// Helper to pad/truncate text to box width (minus borders)
+	innerWidth := boxWidth - 2 // Account for left and right borders
+	padText := func(s string, width int) string {
+		if len(s) > width {
+			return s[:width]
+		}
+		return s + strings.Repeat(" ", width-len(s))
+	}
+	centerText := func(s string, width int) string {
+		if len(s) >= width {
+			return s[:width]
+		}
+		padLeft := (width - len(s)) / 2
+		padRight := width - len(s) - padLeft
+		return strings.Repeat(" ", padLeft) + s + strings.Repeat(" ", padRight)
+	}
+
+	// Truncate directory path if too long
+	dirDisplay := e.fileBrowserDir
+	maxDirLen := innerWidth - 12 // "Directory: " prefix
+	if len(dirDisplay) > maxDirLen {
+		dirDisplay = "..." + dirDisplay[len(dirDisplay)-maxDirLen+3:]
+	}
+
+	// Build the dialog lines
+	var dialogLines []string
+
+	// Top border with title
+	title := " Open File "
+	titlePadLeft := (boxWidth - 2 - len(title)) / 2
+	titlePadRight := boxWidth - 2 - len(title) - titlePadLeft
+	dialogLines = append(dialogLines, "┌"+strings.Repeat("─", titlePadLeft)+title+strings.Repeat("─", titlePadRight)+"┐")
+
+	// Directory line
+	dialogLines = append(dialogLines, "│"+padText(" Directory: "+dirDisplay, innerWidth)+"│")
+
+	// Separator
+	dialogLines = append(dialogLines, "├"+strings.Repeat("─", innerWidth)+"┤")
+
+	// File list
+	for i := 0; i < visibleHeight; i++ {
+		idx := e.fileBrowserScroll + i
+		if idx < len(e.fileBrowserEntries) {
+			entry := e.fileBrowserEntries[idx]
+			var line string
+			if entry.IsDir {
+				line = fmt.Sprintf(" %-36s %8s ", entry.Name, "<DIR>")
+			} else {
+				line = fmt.Sprintf(" %-36s %8s ", entry.Name, formatFileSize(entry.Size))
+			}
+			// Truncate if needed
+			if len(line) > innerWidth {
+				line = line[:innerWidth]
+			} else {
+				line = padText(line, innerWidth)
+			}
+			// Highlight selected item
+			if idx == e.fileBrowserSelected {
+				// Selected: white on blue
+				line = "\033[44;97m" + line + "\033[46;30m"
+			}
+			dialogLines = append(dialogLines, "│"+line+"│")
+		} else {
+			// Empty line
+			dialogLines = append(dialogLines, "│"+strings.Repeat(" ", innerWidth)+"│")
+		}
+	}
+
+	// Separator
+	dialogLines = append(dialogLines, "├"+strings.Repeat("─", innerWidth)+"┤")
+
+	// Help line
+	helpText := "[Enter] Open  [Esc] Cancel  [Bksp] Parent"
+	dialogLines = append(dialogLines, "│"+centerText(helpText, innerWidth)+"│")
+
+	// Bottom border
+	dialogLines = append(dialogLines, "└"+strings.Repeat("─", innerWidth)+"┘")
+
+	// Calculate centering
+	startX := (e.width - boxWidth) / 2
+	if startX < 0 {
+		startX = 0
+	}
+	startY := (e.viewport.Height() - boxHeight) / 2
+	if startY < 0 {
+		startY = 0
+	}
+
+	viewportLines := strings.Split(viewportContent, "\n")
+
+	for i, dialogLine := range dialogLines {
+		viewportY := startY + i
+		if viewportY >= 0 && viewportY < len(viewportLines) {
+			// Build the styled line with cyan background
+			var styledLine strings.Builder
+			styledLine.WriteString("\033[46;30m") // Cyan bg, black text
+			styledLine.WriteString(dialogLine)
 			styledLine.WriteString("\033[0m")
 
 			// Overlay on viewport line
