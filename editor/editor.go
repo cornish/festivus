@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"festivus/clipboard"
+	"festivus/config"
 	"festivus/ui"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -43,15 +44,42 @@ var FestivusQuotes = []string{
 	"I find tinsel distracting.",
 	"It's a Festivus miracle!",
 	"Serenity now!",
-	"The tradition of Festivus begins with the Airing of Grievances.",
+	"The tradition of Festivus begins with the airing of grievances.",
 	"Until you pin me, George, Festivus is not over!",
 	"No bagel, no bagel, no bagel!",
 	"I find your belief system fascinating.",
 	"This new holiday is scratching me right where I itch.",
-	"Weren't there feats of strength that ended with you crying?",
-	"The pole. It requires no decoration.",
+	"Weren't there feats of strength that ended up with you crying?",
+	"Instead there's a pole. Requires no decoration.",
 	"We don't care and it shows.",
 	"You couldn't smooth a silk sheet with a hot babe in it.",
+	"Another piece of the puzzle falls into place.",
+	"Instead of a tree didn't your father put up an aluminum pole?",
+	"Happy Festivus.",
+	"What's Festivus?",
+	"It's a stupid holiday my father invented. It doesn't exist.",
+	"Happy Festivus, Georgie.",
+	"Frank invented a holiday? He's so prolific.",
+	"As I rained blows upon him, I realized there had to be another way.",
+	"But out of that a new holiday was born.",
+	"Festivus is back!",
+	"I'll get the pole out of the crawl space.",
+	"What is that? Is that the pole?",
+	"Festivus is your heritage. It's part of who you are.",
+	"That's why I hate it.",
+	"You're just weak. You're weak.",
+	"It's time for the Festivus feats of strength.",
+	"I don't really celebrate Christmas. I celebrate Festivus.",
+	"I was afraid that I would be persecuted for my beliefs.",
+	"It's made from aluminum. Very high strength to weight ratio.",
+	"Not the feats of strength!",
+	"Oh, please. Somebody stop this.",
+	"Stop crying and fight your father.",
+	"I give! I give!",
+	"This is the best Festivus ever!",
+	"When George was growing up his father hated all the commercial religious aspects of Christmas, so he made up his own holiday.",
+	"At the Festivus dinner you gather your family around and tell them all the ways they have disappointed you over the past year.",
+	"George, you're forgetting how much Festivus has meant to us all.",
 }
 
 // Editor is the main Bubbletea model for the text editor
@@ -99,14 +127,22 @@ type Editor struct {
 
 	// About dialog state
 	aboutQuote string
+
+	// Configuration
+	config *config.Config
 }
 
-// New creates a new editor instance
+// New creates a new editor instance with default config
 func New() *Editor {
+	return NewWithConfig(config.DefaultConfig())
+}
+
+// NewWithConfig creates a new editor instance with the given configuration
+func NewWithConfig(cfg *config.Config) *Editor {
 	styles := ui.DefaultStyles()
 	buf := NewBuffer()
 
-	return &Editor{
+	e := &Editor{
 		buffer:    buf,
 		cursor:    NewCursor(buf),
 		selection: NewSelection(),
@@ -119,7 +155,24 @@ func New() *Editor {
 		mode:      ModeNormal,
 		width:     80,
 		height:    24,
+		config:    cfg,
 	}
+
+	// Apply config settings
+	if cfg != nil {
+		e.viewport.SetWordWrap(cfg.Editor.WordWrap)
+		e.viewport.ShowLineNumbers(cfg.Editor.LineNumbers)
+
+		// Update menu checkboxes to reflect config
+		if cfg.Editor.WordWrap {
+			e.menubar.SetItemLabel(ui.ActionWordWrap, "[x] Word Wrap")
+		}
+		if cfg.Editor.LineNumbers {
+			e.menubar.SetItemLabel(ui.ActionLineNumbers, "[x] Line Numbers")
+		}
+	}
+
+	return e
 }
 
 // LoadFile loads a file into the editor
@@ -332,11 +385,31 @@ func (e *Editor) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return e, nil
 
 	case tea.KeyShiftUp:
-		e.moveWithSelection(e.cursor.MoveUp)
+		e.moveWithSelection(func() bool {
+			if e.viewport.WordWrap() {
+				newLine, newCol := e.viewport.MoveUpVisual(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
+				if newLine == e.cursor.Line() && newCol == e.cursor.Col() {
+					return false
+				}
+				e.cursor.SetPosition(newLine, newCol)
+				return true
+			}
+			return e.cursor.MoveUp()
+		})
 		return e, nil
 
 	case tea.KeyShiftDown:
-		e.moveWithSelection(e.cursor.MoveDown)
+		e.moveWithSelection(func() bool {
+			if e.viewport.WordWrap() {
+				newLine, newCol := e.viewport.MoveDownVisual(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
+				if newLine == e.cursor.Line() && newCol == e.cursor.Col() {
+					return false
+				}
+				e.cursor.SetPosition(newLine, newCol)
+				return true
+			}
+			return e.cursor.MoveDown()
+		})
 		return e, nil
 
 	case tea.KeyShiftHome:
@@ -400,13 +473,23 @@ func (e *Editor) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyUp:
 		e.selection.Clear()
-		e.cursor.MoveUp()
+		if e.viewport.WordWrap() {
+			newLine, newCol := e.viewport.MoveUpVisual(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
+			e.cursor.SetPosition(newLine, newCol)
+		} else {
+			e.cursor.MoveUp()
+		}
 		e.viewport.EnsureCursorVisibleWrapped(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
 		return e, nil
 
 	case tea.KeyDown:
 		e.selection.Clear()
-		e.cursor.MoveDown()
+		if e.viewport.WordWrap() {
+			newLine, newCol := e.viewport.MoveDownVisual(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
+			e.cursor.SetPosition(newLine, newCol)
+		} else {
+			e.cursor.MoveDown()
+		}
 		e.viewport.EnsureCursorVisibleWrapped(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
 		return e, nil
 
@@ -577,10 +660,30 @@ func (e *Editor) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		e.moveWithSelection(e.cursor.MoveRight)
 		return e, nil
 	case "shift+up":
-		e.moveWithSelection(e.cursor.MoveUp)
+		e.moveWithSelection(func() bool {
+			if e.viewport.WordWrap() {
+				newLine, newCol := e.viewport.MoveUpVisual(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
+				if newLine == e.cursor.Line() && newCol == e.cursor.Col() {
+					return false
+				}
+				e.cursor.SetPosition(newLine, newCol)
+				return true
+			}
+			return e.cursor.MoveUp()
+		})
 		return e, nil
 	case "shift+down":
-		e.moveWithSelection(e.cursor.MoveDown)
+		e.moveWithSelection(func() bool {
+			if e.viewport.WordWrap() {
+				newLine, newCol := e.viewport.MoveDownVisual(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
+				if newLine == e.cursor.Line() && newCol == e.cursor.Col() {
+					return false
+				}
+				e.cursor.SetPosition(newLine, newCol)
+				return true
+			}
+			return e.cursor.MoveDown()
+		})
 		return e, nil
 	case "shift+home":
 		e.moveWithSelection(func() bool {
@@ -906,6 +1009,9 @@ func (e *Editor) toggleWordWrap() {
 
 	// Ensure cursor stays visible after toggle
 	e.viewport.EnsureCursorVisibleWrapped(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
+
+	// Save to config
+	e.saveConfig()
 }
 
 // toggleLineNumbers toggles line numbers on/off
@@ -924,6 +1030,20 @@ func (e *Editor) toggleLineNumbers() {
 
 	// Ensure cursor stays visible after toggle (text width changes)
 	e.viewport.EnsureCursorVisibleWrapped(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
+
+	// Save to config
+	e.saveConfig()
+}
+
+// saveConfig saves the current settings to the config file
+func (e *Editor) saveConfig() {
+	if e.config == nil {
+		e.config = config.DefaultConfig()
+	}
+	e.config.Editor.WordWrap = e.viewport.WordWrap()
+	e.config.Editor.LineNumbers = e.viewport.ShowLineNum()
+	// Save in background - don't block the UI
+	go e.config.Save()
 }
 
 // showAbout opens the About dialog with a random quote
@@ -1431,18 +1551,48 @@ func (e *Editor) overlayAboutDialog(viewportContent string) string {
 		quote = "A Festivus for the rest of us!"
 	}
 
-	// Truncate quote if needed (box is 64, minus 2 for quotes, leave margin)
-	maxQuoteWidth := 58
-	if len(quote) > maxQuoteWidth {
-		quote = quote[:maxQuoteWidth-3] + "..."
-	}
-
 	// ASCII art from festivus.txt - art is 62 chars, box is 64 for padding
 	boxWidth := 64
 	centerText := func(s string) string {
-		padLeft := (boxWidth - len(s)) / 2
-		padRight := boxWidth - len(s) - padLeft
+		sLen := len(s)
+		if sLen >= boxWidth {
+			// Truncate if too long
+			return s[:boxWidth]
+		}
+		padLeft := (boxWidth - sLen) / 2
+		padRight := boxWidth - sLen - padLeft
 		return strings.Repeat(" ", padLeft) + s + strings.Repeat(" ", padRight)
+	}
+
+	// Split quote into lines if too long (max 60 chars per line)
+	maxLineWidth := 60
+	var quoteLines []string
+	quotedText := "\"" + quote + "\""
+	if len(quotedText) <= maxLineWidth {
+		// Fits on one line
+		quoteLines = []string{centerText(quotedText)}
+	} else {
+		// Split at word boundary
+		words := strings.Fields(quote)
+		line1 := "\""
+		line2 := ""
+		for _, word := range words {
+			testLine := line1
+			if len(line1) > 1 {
+				testLine += " "
+			}
+			testLine += word
+			if line2 == "" && len(testLine) <= maxLineWidth {
+				line1 = testLine
+			} else {
+				if line2 != "" {
+					line2 += " "
+				}
+				line2 += word
+			}
+		}
+		line2 += "\""
+		quoteLines = []string{centerText(line1), centerText(line2)}
 	}
 
 	aboutLines := []string{
@@ -1460,11 +1610,13 @@ func (e *Editor) overlayAboutDialog(viewportContent string) string {
 		centerText("github.com/cornish/festivus"),
 		centerText("Copyright (c) 2025"),
 		strings.Repeat(" ", boxWidth),
-		centerText("\"" + quote + "\""),
+	}
+	aboutLines = append(aboutLines, quoteLines...)
+	aboutLines = append(aboutLines,
 		strings.Repeat(" ", boxWidth),
 		centerText("Press any key to continue..."),
 		strings.Repeat(" ", boxWidth),
-	}
+	)
 	boxHeight := len(aboutLines)
 
 	// Calculate centering

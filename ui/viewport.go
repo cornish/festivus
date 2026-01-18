@@ -92,6 +92,107 @@ func (v *Viewport) WordWrap() bool {
 	return v.wordWrap
 }
 
+// MoveDownVisual moves the cursor down by one visual line when word wrap is enabled.
+// Returns the new line and column position.
+func (v *Viewport) MoveDownVisual(lines []string, line, col int) (newLine, newCol int) {
+	if !v.wordWrap || line >= len(lines) {
+		// No word wrap or at end - just move to next buffer line
+		if line < len(lines)-1 {
+			return line + 1, col
+		}
+		return line, col
+	}
+
+	textWidth := v.TextWidth()
+	if textWidth <= 0 {
+		textWidth = 1
+	}
+
+	currentLine := lines[line]
+	lineRunes := utf8.RuneCountInString(currentLine)
+
+	// Which visual segment is the cursor in?
+	segmentIdx := col / textWidth
+	segmentCount := (lineRunes + textWidth - 1) / textWidth
+	if segmentCount == 0 {
+		segmentCount = 1
+	}
+
+	// If there's another segment below in the same buffer line, move there
+	if segmentIdx < segmentCount-1 {
+		// Move to next segment, same relative position
+		newCol = (segmentIdx+1)*textWidth + (col % textWidth)
+		if newCol > lineRunes {
+			newCol = lineRunes
+		}
+		return line, newCol
+	}
+
+	// Otherwise, move to the next buffer line
+	if line < len(lines)-1 {
+		// Try to maintain column position within the first segment
+		colInSegment := col % textWidth
+		nextLineRunes := utf8.RuneCountInString(lines[line+1])
+		newCol = colInSegment
+		if newCol > nextLineRunes {
+			newCol = nextLineRunes
+		}
+		return line + 1, newCol
+	}
+
+	// At end of file
+	return line, col
+}
+
+// MoveUpVisual moves the cursor up by one visual line when word wrap is enabled.
+// Returns the new line and column position.
+func (v *Viewport) MoveUpVisual(lines []string, line, col int) (newLine, newCol int) {
+	if !v.wordWrap {
+		// No word wrap - just move to previous buffer line
+		if line > 0 {
+			return line - 1, col
+		}
+		return line, col
+	}
+
+	textWidth := v.TextWidth()
+	if textWidth <= 0 {
+		textWidth = 1
+	}
+
+	// Which visual segment is the cursor in?
+	segmentIdx := col / textWidth
+
+	// If we're not in the first segment, move to the previous segment
+	if segmentIdx > 0 {
+		// Move to previous segment, same relative position
+		newCol = (segmentIdx-1)*textWidth + (col % textWidth)
+		return line, newCol
+	}
+
+	// Otherwise, move to the last segment of the previous buffer line
+	if line > 0 {
+		prevLine := lines[line-1]
+		prevLineRunes := utf8.RuneCountInString(prevLine)
+		prevSegmentCount := (prevLineRunes + textWidth - 1) / textWidth
+		if prevSegmentCount == 0 {
+			prevSegmentCount = 1
+		}
+
+		// Move to last segment of previous line, try to maintain column position
+		colInSegment := col % textWidth
+		lastSegmentStart := (prevSegmentCount - 1) * textWidth
+		newCol = lastSegmentStart + colInSegment
+		if newCol > prevLineRunes {
+			newCol = prevLineRunes
+		}
+		return line - 1, newCol
+	}
+
+	// At start of file
+	return line, col
+}
+
 // EnsureCursorVisible scrolls the viewport to ensure the cursor is visible
 func (v *Viewport) EnsureCursorVisible(cursorLine, cursorCol int) {
 	// Vertical scrolling - word wrap uses visual lines

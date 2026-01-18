@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"festivus/config"
 	"festivus/editor"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -27,8 +28,11 @@ func main() {
 		}
 	}
 
-	// Create editor
-	e := editor.New()
+	// Load configuration
+	cfg, _ := config.Load() // Ignore error, defaults are fine
+
+	// Create editor with config
+	e := editor.NewWithConfig(cfg)
 
 	// Load file if provided
 	if len(args) > 0 {
