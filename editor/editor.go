@@ -25,6 +25,7 @@ const (
 	ModeMenu
 	ModeFind
 	ModePrompt
+	ModeHelp
 	ModeAbout
 	ModeFileBrowser
 	ModeSaveAs
@@ -148,6 +149,7 @@ type Editor struct {
 
 	// Save As state
 	saveAsFilename string // Filename input for Save As dialog
+	saveAsFocusBrowser bool   // true = focus on browser, false = focus on filename
 
 	// Syntax highlighting
 	highlighter *syntax.Highlighter
@@ -337,6 +339,12 @@ func (e *Editor) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Handle prompt mode
 	if e.mode == ModePrompt {
 		return e.handlePromptKey(msg)
+	}
+
+	// Handle help mode - any key dismisses
+	if e.mode == ModeHelp {
+		e.mode = ModeNormal
+		return e, nil
 	}
 
 	// Handle about mode - any key dismisses
@@ -685,7 +693,7 @@ func (e *Editor) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		e.updateViewportSize()
 		return e, nil
 	case "f1":
-		e.showAbout()
+		e.showHelp()
 		return e, nil
 	case "f2":
 		e.insertLoremIpsum()
@@ -1097,16 +1105,16 @@ func (e *Editor) fileBrowserVisibleHeight() int {
 	return boxHeight - 5
 }
 
-// saveAsVisibleHeight returns the number of visible directory entries in Save As
+// saveAsVisibleHeight returns the number of visible file entries in Save As
 func (e *Editor) saveAsVisibleHeight() int {
 	boxHeight := e.viewport.Height() - 4
-	if boxHeight > 16 {
-		boxHeight = 16 // Smaller than file browser
+	if boxHeight > 18 {
+		boxHeight = 18
 	}
 	if boxHeight < 5 {
 		boxHeight = 5
 	}
-	// Subtract header (title + directory + filename input + separator) and footer
+	// Subtract header (title + directory + filename + separator) and footer (separator + help)
 	return boxHeight - 6
 }
 
@@ -1119,60 +1127,84 @@ func (e *Editor) handleSaveAsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		e.mode = ModeNormal
 		e.statusbar.SetMessage("Cancelled", "info")
 
+	case tea.KeyTab:
+		// Toggle focus between filename field and browser
+		e.saveAsFocusBrowser = !e.saveAsFocusBrowser
+
 	case tea.KeyEnter:
-		// Save the file
-		if e.saveAsFilename == "" {
-			e.statusbar.SetMessage("Please enter a filename", "error")
-			return e, nil
-		}
-		fullPath := filepath.Join(e.fileBrowserDir, e.saveAsFilename)
-		// Check if file exists
-		if _, err := os.Stat(fullPath); err == nil {
-			// File exists - use prompt for confirmation
-			e.pendingFilename = fullPath
-			e.promptText = "File exists. Overwrite? (y/n): "
-			e.promptInput = ""
-			e.promptAction = PromptConfirmOverwrite
-			e.mode = ModePrompt
-			return e, nil
-		}
-		// Save the file
-		e.filename = fullPath
-		e.mode = ModeNormal
-		if e.doSave() {
-			e.updateTitle()
+		if e.saveAsFocusBrowser {
+			// Focus on browser - handle directory navigation or file selection
+			if len(e.fileBrowserEntries) > 0 && e.fileBrowserSelected >= 0 && e.fileBrowserSelected < len(e.fileBrowserEntries) {
+				entry := e.fileBrowserEntries[e.fileBrowserSelected]
+				if entry.IsDir {
+					// Enter directory
+					var newPath string
+					if entry.Name == ".." {
+						newPath = filepath.Dir(e.fileBrowserDir)
+					} else {
+						newPath = filepath.Join(e.fileBrowserDir, entry.Name)
+					}
+					e.loadDirectory(newPath)
+				} else {
+					// Copy filename to input and switch focus to filename
+					e.saveAsFilename = entry.Name
+					e.saveAsFocusBrowser = false
+				}
+			}
+		} else {
+			// Focus on filename - save the file
+			if e.saveAsFilename == "" {
+				e.statusbar.SetMessage("Enter a filename", "error")
+				return e, nil
+			}
+			fullPath := filepath.Join(e.fileBrowserDir, e.saveAsFilename)
+			// Check if file exists
+			if _, err := os.Stat(fullPath); err == nil {
+				// File exists - prompt for confirmation
+				e.pendingFilename = fullPath
+				e.promptText = "Overwrite? (y/n): "
+				e.promptInput = ""
+				e.promptAction = PromptConfirmOverwrite
+				e.mode = ModePrompt
+				return e, nil
+			}
+			// Save the file
+			e.filename = fullPath
+			e.mode = ModeNormal
+			if e.doSave() {
+				e.updateTitle()
+			}
 		}
 
 	case tea.KeyBackspace:
-		// If filename has text, delete from filename
-		// Otherwise, go to parent directory
-		if len(e.saveAsFilename) > 0 {
-			e.saveAsFilename = e.saveAsFilename[:len(e.saveAsFilename)-1]
-		} else if e.fileBrowserDir != "/" {
-			newPath := filepath.Dir(e.fileBrowserDir)
-			e.loadDirectoryForSaveAs(newPath)
-		}
-
-	case tea.KeyTab:
-		// Toggle between filename input and directory list
-		if e.fileBrowserSelected < 0 {
-			e.fileBrowserSelected = 0
+		if e.saveAsFocusBrowser {
+			// Go to parent directory
+			if e.fileBrowserDir != "/" {
+				newPath := filepath.Dir(e.fileBrowserDir)
+				e.loadDirectory(newPath)
+			}
 		} else {
-			e.fileBrowserSelected = -1
+			// Delete from filename
+			if len(e.saveAsFilename) > 0 {
+				e.saveAsFilename = e.saveAsFilename[:len(e.saveAsFilename)-1]
+			}
 		}
 
 	case tea.KeyUp:
-		if e.fileBrowserSelected >= 0 {
+		if e.saveAsFocusBrowser {
 			if e.fileBrowserSelected > 0 {
 				e.fileBrowserSelected--
 				if e.fileBrowserSelected < e.fileBrowserScroll {
 					e.fileBrowserScroll = e.fileBrowserSelected
 				}
 			}
+		} else {
+			// Switch focus to browser
+			e.saveAsFocusBrowser = true
 		}
 
 	case tea.KeyDown:
-		if e.fileBrowserSelected >= 0 {
+		if e.saveAsFocusBrowser {
 			if e.fileBrowserSelected < len(e.fileBrowserEntries)-1 {
 				e.fileBrowserSelected++
 				if e.fileBrowserSelected >= e.fileBrowserScroll+visibleHeight {
@@ -1180,42 +1212,66 @@ func (e *Editor) handleSaveAsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 			}
 		} else {
-			// Start navigating directories
-			e.fileBrowserSelected = 0
+			// Switch focus to browser
+			e.saveAsFocusBrowser = true
 		}
 
-	case tea.KeyRight:
-		// Enter selected directory
-		if e.fileBrowserSelected >= 0 && e.fileBrowserSelected < len(e.fileBrowserEntries) {
-			entry := e.fileBrowserEntries[e.fileBrowserSelected]
-			if entry.IsDir {
-				var newPath string
-				if entry.Name == ".." {
-					newPath = filepath.Dir(e.fileBrowserDir)
-				} else {
-					newPath = filepath.Join(e.fileBrowserDir, entry.Name)
-				}
-				e.loadDirectoryForSaveAs(newPath)
+	case tea.KeyHome:
+		if e.saveAsFocusBrowser {
+			e.fileBrowserSelected = 0
+			e.fileBrowserScroll = 0
+		}
+
+	case tea.KeyEnd:
+		if e.saveAsFocusBrowser {
+			e.fileBrowserSelected = len(e.fileBrowserEntries) - 1
+			if e.fileBrowserSelected < 0 {
 				e.fileBrowserSelected = 0
+			}
+			if e.fileBrowserSelected >= visibleHeight {
+				e.fileBrowserScroll = e.fileBrowserSelected - visibleHeight + 1
 			}
 		}
 
-	case tea.KeyLeft:
-		// Go to parent directory
-		if e.fileBrowserDir != "/" {
-			newPath := filepath.Dir(e.fileBrowserDir)
-			e.loadDirectoryForSaveAs(newPath)
-			e.fileBrowserSelected = 0
+	case tea.KeyPgUp:
+		if e.saveAsFocusBrowser {
+			e.fileBrowserSelected -= visibleHeight
+			if e.fileBrowserSelected < 0 {
+				e.fileBrowserSelected = 0
+			}
+			e.fileBrowserScroll -= visibleHeight
+			if e.fileBrowserScroll < 0 {
+				e.fileBrowserScroll = 0
+			}
+		}
+
+	case tea.KeyPgDown:
+		if e.saveAsFocusBrowser {
+			e.fileBrowserSelected += visibleHeight
+			if e.fileBrowserSelected >= len(e.fileBrowserEntries) {
+				e.fileBrowserSelected = len(e.fileBrowserEntries) - 1
+			}
+			if e.fileBrowserSelected < 0 {
+				e.fileBrowserSelected = 0
+			}
+			e.fileBrowserScroll += visibleHeight
+			maxScroll := len(e.fileBrowserEntries) - visibleHeight
+			if maxScroll < 0 {
+				maxScroll = 0
+			}
+			if e.fileBrowserScroll > maxScroll {
+				e.fileBrowserScroll = maxScroll
+			}
 		}
 
 	case tea.KeyRunes:
-		// Type into filename
+		// Always type into filename field, switch focus there
 		e.saveAsFilename += string(msg.Runes)
-		e.fileBrowserSelected = -1 // Focus back on filename
+		e.saveAsFocusBrowser = false
 
 	case tea.KeySpace:
 		e.saveAsFilename += " "
-		e.fileBrowserSelected = -1
+		e.saveAsFocusBrowser = false
 	}
 
 	return e, nil
@@ -1343,6 +1399,8 @@ func (e *Editor) executeAction(action ui.MenuAction) (tea.Model, tea.Cmd) {
 		e.toggleLineNumbers()
 	case ui.ActionSyntaxHighlight:
 		e.toggleSyntaxHighlight()
+	case ui.ActionHelp:
+		e.showHelp()
 	case ui.ActionAbout:
 		e.showAbout()
 	}
@@ -1419,6 +1477,11 @@ func (e *Editor) saveConfig() {
 	e.config.Editor.SyntaxHighlight = e.highlighter.Enabled()
 	// Save in background - don't block the UI
 	go e.config.Save()
+}
+
+// showHelp opens the Help dialog with keyboard shortcuts
+func (e *Editor) showHelp() {
+	e.mode = ModeHelp
 }
 
 // showAbout opens the About dialog with a random quote
@@ -1743,52 +1806,11 @@ func (e *Editor) showSaveAs() {
 	}
 
 	e.fileBrowserDir = startDir
-	e.fileBrowserSelected = -1 // No selection initially (focus on filename input)
+	e.fileBrowserSelected = 0
 	e.fileBrowserScroll = 0
-	e.loadDirectoryForSaveAs(startDir)
+	e.saveAsFocusBrowser = false // Start with focus on filename field
+	e.loadDirectory(startDir)
 	e.mode = ModeSaveAs
-}
-
-// loadDirectoryForSaveAs reads the contents of a directory for the Save As dialog
-// Only shows directories (not files) since user types the filename
-func (e *Editor) loadDirectoryForSaveAs(path string) {
-	entries, err := os.ReadDir(path)
-	if err != nil {
-		e.statusbar.SetMessage("Error reading directory: "+err.Error(), "error")
-		return
-	}
-
-	e.fileBrowserEntries = make([]FileEntry, 0)
-
-	// Add parent directory entry if not at root
-	if path != "/" {
-		e.fileBrowserEntries = append(e.fileBrowserEntries, FileEntry{
-			Name:  "..",
-			IsDir: true,
-			Size:  0,
-		})
-	}
-
-	// Only include directories
-	var dirs []FileEntry
-	for _, entry := range entries {
-		if entry.IsDir() {
-			dirs = append(dirs, FileEntry{
-				Name:  entry.Name(),
-				IsDir: true,
-				Size:  0,
-			})
-		}
-	}
-
-	// Sort directories alphabetically (case-insensitive)
-	sort.Slice(dirs, func(i, j int) bool {
-		return strings.ToLower(dirs[i].Name) < strings.ToLower(dirs[j].Name)
-	})
-
-	e.fileBrowserEntries = append(e.fileBrowserEntries, dirs...)
-	e.fileBrowserDir = path
-	e.fileBrowserScroll = 0
 }
 
 // loadDirectory reads the contents of a directory and populates the file browser
@@ -1986,6 +2008,11 @@ func (e *Editor) View() string {
 			}
 			viewportContent = strings.Join(viewportLines, "\n")
 		}
+	}
+
+	// If help dialog is open, overlay it centered on the viewport
+	if e.mode == ModeHelp {
+		viewportContent = e.overlayHelpDialog(viewportContent)
 	}
 
 	// If about dialog is open, overlay it centered on the viewport
@@ -2214,6 +2241,143 @@ func (e *Editor) overlayAboutDialog(viewportContent string) string {
 	return strings.Join(viewportLines, "\n")
 }
 
+// overlayHelpDialog overlays the help dialog centered on the viewport
+func (e *Editor) overlayHelpDialog(viewportContent string) string {
+	// Two-column layout for keyboard shortcuts
+	boxWidth := 72
+	innerWidth := boxWidth - 2 // 70
+	colWidth := 33             // Each column width
+	// Layout: colWidth (33) + separator "  │ " (4) + colWidth (33) = 70
+
+	padText := func(s string, width int) string {
+		if len(s) > width {
+			return s[:width]
+		}
+		return s + strings.Repeat(" ", width-len(s))
+	}
+
+	centerText := func(s string, width int) string {
+		if len(s) >= width {
+			return s[:width]
+		}
+		padLeft := (width - len(s)) / 2
+		padRight := width - len(s) - padLeft
+		return strings.Repeat(" ", padLeft) + s + strings.Repeat(" ", padRight)
+	}
+
+	// Define shortcuts in two columns
+	leftCol := []string{
+		"  FILE",
+		"  Ctrl+N       New file",
+		"  Ctrl+O       Open file",
+		"  Ctrl+S       Save file",
+		"  Ctrl+Q       Quit",
+		"",
+		"  EDIT",
+		"  Ctrl+Z       Undo",
+		"  Ctrl+Y       Redo",
+		"  Ctrl+X       Cut",
+		"  Ctrl+C       Copy",
+		"  Ctrl+V       Paste",
+		"  Ctrl+A       Select all",
+		"  Ctrl+F       Find",
+	}
+
+	rightCol := []string{
+		"  NAVIGATION",
+		"  Arrows       Move cursor",
+		"  Ctrl+Left/Right  Move by word",
+		"  Home/End     Start/end of line",
+		"  Ctrl+Home    Start of file",
+		"  Ctrl+End     End of file",
+		"  PgUp/PgDn    Page up/down",
+		"",
+		"  SELECTION",
+		"  Shift+Arrows    Select text",
+		"  Ctrl+Shift+L/R  Select word",
+		"  Shift+Home/End  Select to line",
+		"",
+		"  MOUSE: Click, Drag, Scroll",
+	}
+
+	// Build help lines
+	var helpLines []string
+
+	// Top border with title
+	title := " Keyboard Shortcuts "
+	titlePadLeft := (innerWidth - len(title)) / 2
+	titlePadRight := innerWidth - len(title) - titlePadLeft
+	helpLines = append(helpLines, "┌"+strings.Repeat("─", titlePadLeft)+title+strings.Repeat("─", titlePadRight)+"┐")
+
+	// Empty line
+	helpLines = append(helpLines, "│"+strings.Repeat(" ", innerWidth)+"│")
+
+	// Build two-column content
+	maxRows := len(leftCol)
+	if len(rightCol) > maxRows {
+		maxRows = len(rightCol)
+	}
+
+	for i := 0; i < maxRows; i++ {
+		left := ""
+		right := ""
+		if i < len(leftCol) {
+			left = leftCol[i]
+		}
+		if i < len(rightCol) {
+			right = rightCol[i]
+		}
+		line := padText(left, colWidth) + "  │ " + padText(right, colWidth)
+		helpLines = append(helpLines, "│"+line+"│")
+	}
+
+	// Empty line
+	helpLines = append(helpLines, "│"+strings.Repeat(" ", innerWidth)+"│")
+
+	// Options section
+	helpLines = append(helpLines, "│"+centerText("OPTIONS: Ctrl+W Word Wrap │ Ctrl+L Line Numbers", innerWidth)+"│")
+	helpLines = append(helpLines, "│"+centerText("MENUS: F10 or Alt+F/E/O/H", innerWidth)+"│")
+
+	// Empty line
+	helpLines = append(helpLines, "│"+strings.Repeat(" ", innerWidth)+"│")
+
+	// Footer
+	helpLines = append(helpLines, "│"+centerText("Press any key to continue...", innerWidth)+"│")
+
+	// Bottom border
+	helpLines = append(helpLines, "└"+strings.Repeat("─", innerWidth)+"┘")
+
+	boxHeight := len(helpLines)
+
+	// Calculate centering
+	startX := (e.width - boxWidth) / 2
+	if startX < 0 {
+		startX = 0
+	}
+	startY := (e.viewport.Height() - boxHeight) / 2
+	if startY < 0 {
+		startY = 0
+	}
+
+	viewportLines := strings.Split(viewportContent, "\n")
+
+	for i, helpLine := range helpLines {
+		viewportY := startY + i
+		if viewportY >= 0 && viewportY < len(viewportLines) {
+			// Build the styled help line with cyan background
+			var styledLine strings.Builder
+			styledLine.WriteString("\033[46;30m") // Cyan bg, black text
+			styledLine.WriteString(helpLine)
+			styledLine.WriteString("\033[0m")
+
+			// Overlay on viewport line
+			viewportLines[viewportY] = overlayLineAt(styledLine.String(), viewportLines[viewportY], startX)
+		}
+	}
+
+	return strings.Join(viewportLines, "\n")
+}
+
 // overlayFileBrowser overlays the file browser dialog centered on the viewport
 func (e *Editor) overlayFileBrowser(viewportContent string) string {
 	// Box dimensions
@@ -2333,7 +2497,7 @@ func (e *Editor) overlaySaveAs(viewportContent string) string {
 	// Box dimensions
 	boxWidth := 52
 	visibleHeight := e.saveAsVisibleHeight()
-	boxHeight := visibleHeight + 7 // +7 for header (4 with filename) and footer (3)
+	boxHeight := visibleHeight + 6 // +6 for header (4 with filename) and footer (2)
 
 	// Helper to pad/truncate text to box width (minus borders)
 	innerWidth := boxWidth - 2 // Account for left and right borders
@@ -2371,39 +2535,49 @@ func (e *Editor) overlaySaveAs(viewportContent string) string {
 	// Directory line
 	dialogLines = append(dialogLines, "│"+padText(" Directory: "+dirDisplay, innerWidth)+"│")
 
-	// Filename input line (highlighted when focused)
+	// Filename input line - show block cursor when focused
 	filenameDisplay := e.saveAsFilename
-	if len(filenameDisplay) > innerWidth-12 {
-		filenameDisplay = filenameDisplay[len(filenameDisplay)-innerWidth+12:]
+	editAreaWidth := innerWidth - 12 // " Filename: " prefix (11) + 1 space
+	if len(filenameDisplay) > editAreaWidth-1 { // -1 for cursor
+		filenameDisplay = filenameDisplay[len(filenameDisplay)-editAreaWidth+1:]
 	}
-	filenameLabel := " Filename: " + filenameDisplay
-	if e.fileBrowserSelected < 0 {
-		// Focused - show cursor
-		filenameLabel += "_"
-	}
-	filenameLine := padText(filenameLabel, innerWidth)
-	if e.fileBrowserSelected < 0 {
-		// Highlight filename input when focused
-		filenameLine = "\033[44;97m" + filenameLine + "\033[46;30m"
+	var filenameLine string
+	if !e.saveAsFocusBrowser {
+		// Focused - show filename with block cursor at end
+		cursor := "\033[7m \033[27m" // Reverse video space (block cursor)
+		padding := editAreaWidth - len(filenameDisplay) - 1
+		if padding < 0 {
+			padding = 0
+		}
+		filenameLine = " Filename: " + filenameDisplay + cursor + strings.Repeat(" ", padding)
+	} else {
+		// Not focused - just show filename
+		filenameLine = padText(" Filename: "+filenameDisplay, innerWidth)
 	}
 	dialogLines = append(dialogLines, "│"+filenameLine+"│")
 
 	// Separator
 	dialogLines = append(dialogLines, "├"+strings.Repeat("─", innerWidth)+"┤")
 
-	// Directory list (only directories, for navigation)
+	// File list
 	for i := 0; i < visibleHeight; i++ {
 		idx := e.fileBrowserScroll + i
 		if idx < len(e.fileBrowserEntries) {
 			entry := e.fileBrowserEntries[idx]
-			line := fmt.Sprintf(" %-46s ", entry.Name+"/")
+			var line string
+			if entry.IsDir {
+				line = fmt.Sprintf(" %-36s %8s ", entry.Name, "<DIR>")
+			} else {
+				line = fmt.Sprintf(" %-36s %8s ", entry.Name, formatFileSize(entry.Size))
+			}
+			// Truncate if needed
 			if len(line) > innerWidth {
 				line = line[:innerWidth]
 			} else {
 				line = padText(line, innerWidth)
 			}
-			// Highlight selected item
-			if idx == e.fileBrowserSelected {
+			// Highlight selected item only when browser has focus
+			if idx == e.fileBrowserSelected && e.saveAsFocusBrowser {
 				// Selected: white on blue
 				line = "\033[44;97m" + line + "\033[46;30m"
 			}
@@ -2417,11 +2591,14 @@ func (e *Editor) overlaySaveAs(viewportContent string) string {
 	// Separator
 	dialogLines = append(dialogLines, "├"+strings.Repeat("─", innerWidth)+"┤")
 
-	// Help lines
-	helpText1 := "[Enter] Save  [Esc] Cancel  [Tab] Switch"
-	helpText2 := "[←/→] Navigate dirs  [↑/↓] Select dir"
-	dialogLines = append(dialogLines, "│"+centerText(helpText1, innerWidth)+"│")
-	dialogLines = append(dialogLines, "│"+centerText(helpText2, innerWidth)+"│")
+	// Help line - changes based on focus
+	var helpText string
+	if e.saveAsFocusBrowser {
+		helpText = "[Enter] Select  [Tab] Switch  [Esc] Cancel"
+	} else {
+		helpText = "[Enter] Save  [Tab] Switch  [Esc] Cancel"
+	}
+	dialogLines = append(dialogLines, "│"+centerText(helpText, innerWidth)+"│")
 
 	// Bottom border
 	dialogLines = append(dialogLines, "└"+strings.Repeat("─", innerWidth)+"┘")

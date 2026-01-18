@@ -31,6 +31,7 @@ const (
 	ActionLineNumbers
 	ActionSyntaxHighlight
 	// Help menu
+	ActionHelp
 	ActionAbout
 )
 
@@ -97,7 +98,8 @@ func NewMenuBar(styles Styles) *MenuBar {
 			{
 				Label: "Help",
 				Items: []MenuItem{
-					{Label: "About", Shortcut: "F1", HotKey: 'A', Action: ActionAbout},
+					{Label: "Help", Shortcut: "F1", HotKey: 'H', Action: ActionHelp},
+					{Label: "About", Shortcut: "", HotKey: 'A', Action: ActionAbout},
 				},
 			},
 		},
