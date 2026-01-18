@@ -228,8 +228,13 @@ func (e *Editor) overlayHelpDialog(viewportContent string) string {
 		"  Ctrl+X       Cut",
 		"  Ctrl+C       Copy",
 		"  Ctrl+V       Paste",
+		"  Ctrl+K       Cut line",
 		"  Ctrl+A       Select all",
+		"",
+		"  SEARCH",
 		"  Ctrl+F       Find",
+		"  F3           Find next",
+		"  Ctrl+H       Replace",
 	}
 
 	rightCol := []string{
@@ -240,12 +245,12 @@ func (e *Editor) overlayHelpDialog(viewportContent string) string {
 		"  Ctrl+Home    Start of file",
 		"  Ctrl+End     End of file",
 		"  PgUp/PgDn    Page up/down",
+		"  Ctrl+G       Go to line",
 		"",
 		"  SELECTION",
 		"  Shift+Arrows    Select text",
 		"  Ctrl+Shift+L/R  Select word",
 		"  Shift+Home/End  Select to line",
-		"",
 		"  MOUSE: Click, Drag, Scroll",
 	}
 

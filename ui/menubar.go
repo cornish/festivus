@@ -25,9 +25,14 @@ const (
 	ActionCut
 	ActionCopy
 	ActionPaste
+	ActionCutLine
 	ActionSelectAll
+	// Search menu
 	ActionFind
-	// View menu
+	ActionFindNext
+	ActionReplace
+	ActionGoToLine
+	// Options menu
 	ActionWordWrap
 	ActionLineNumbers
 	ActionSyntaxHighlight
@@ -85,14 +90,23 @@ func NewMenuBar(styles Styles) *MenuBar {
 					{Label: "Cut", Shortcut: "Ctrl+X", HotKey: 'T', Action: ActionCut},
 					{Label: "Copy", Shortcut: "Ctrl+C", HotKey: 'C', Action: ActionCopy},
 					{Label: "Paste", Shortcut: "Ctrl+V", HotKey: 'P', Action: ActionPaste},
+					{Label: "Cut Line", Shortcut: "Ctrl+K", HotKey: 'K', Action: ActionCutLine},
 					{Label: "Select All", Shortcut: "Ctrl+A", HotKey: 'L', Action: ActionSelectAll},
+				},
+			},
+			{
+				Label: "Search",
+				Items: []MenuItem{
 					{Label: "Find", Shortcut: "Ctrl+F", HotKey: 'F', Action: ActionFind},
+					{Label: "Find Next", Shortcut: "F3", HotKey: 'N', Action: ActionFindNext},
+					{Label: "Replace", Shortcut: "Ctrl+H", HotKey: 'R', Action: ActionReplace},
+					{Label: "Go to Line", Shortcut: "Ctrl+G", HotKey: 'G', Action: ActionGoToLine},
 				},
 			},
 			{
 				Label: "Options",
 				Items: []MenuItem{
-					{Label: "[ ] Word Wrap", Shortcut: "Ctrl+W", HotKey: 'W', Action: ActionWordWrap},
+					{Label: "[ ] Word Wrap", Shortcut: "", HotKey: 'W', Action: ActionWordWrap},
 					{Label: "[ ] Line Numbers", Shortcut: "Ctrl+L", HotKey: 'L', Action: ActionLineNumbers},
 					{Label: "[x] Syntax Highlight", Shortcut: "", HotKey: 'S', Action: ActionSyntaxHighlight},
 				},

@@ -14,6 +14,8 @@ type StatusBar struct {
 	col         int
 	totalLines  int
 	encoding    string
+	wordCount   int
+	charCount   int
 	message     string // Temporary message to display
 	messageType string // "info", "error", "success"
 	width       int
@@ -59,6 +61,12 @@ func (s *StatusBar) SetEncoding(encoding string) {
 	s.encoding = encoding
 }
 
+// SetCounts sets the word and character counts
+func (s *StatusBar) SetCounts(words, chars int) {
+	s.wordCount = words
+	s.charCount = chars
+}
+
 // SetMessage sets a temporary message to display
 func (s *StatusBar) SetMessage(message, msgType string) {
 	s.message = message
@@ -97,8 +105,8 @@ func (s *StatusBar) View() string {
 	}
 	sb.WriteString(filename)
 
-	// Right side: line:col, encoding
-	right := fmt.Sprintf("Ln %d, Col %d | %s", s.line, s.col, s.encoding)
+	// Right side: word count, char count, line:col, encoding
+	right := fmt.Sprintf("W:%d C:%d | Ln %d, Col %d | %s", s.wordCount, s.charCount, s.line, s.col, s.encoding)
 
 	// Calculate spacing
 	leftLen := len(filename)

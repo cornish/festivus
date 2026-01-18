@@ -378,3 +378,58 @@ func (b *Buffer) Replace(start, end int, text string) {
 	b.DeleteBefore(end - start)
 	b.Insert(text)
 }
+
+// RuneCount returns the total number of UTF-8 characters in the buffer.
+func (b *Buffer) RuneCount() int {
+	count := 0
+	// Count runes before the gap
+	count += utf8.RuneCount(b.data[:b.gapStart])
+	// Count runes after the gap
+	count += utf8.RuneCount(b.data[b.gapEnd:])
+	return count
+}
+
+// WordCount returns the number of words in the buffer (unicode-aware).
+// Words are sequences of non-whitespace characters separated by whitespace.
+func (b *Buffer) WordCount() int {
+	count := 0
+	inWord := false
+
+	// Process bytes before the gap
+	for i := 0; i < b.gapStart; {
+		r, size := utf8.DecodeRune(b.data[i:b.gapStart])
+		if !isWordSeparator(r) {
+			if !inWord {
+				count++
+				inWord = true
+			}
+		} else {
+			inWord = false
+		}
+		i += size
+	}
+
+	// Process bytes after the gap
+	for i := b.gapEnd; i < len(b.data); {
+		r, size := utf8.DecodeRune(b.data[i:])
+		if !isWordSeparator(r) {
+			if !inWord {
+				count++
+				inWord = true
+			}
+		} else {
+			inWord = false
+		}
+		i += size
+	}
+
+	return count
+}
+
+// isWordSeparator returns true if the rune is whitespace (word separator).
+func isWordSeparator(r rune) bool {
+	// Consider whitespace as word separators
+	return r == ' ' || r == '\t' || r == '\n' || r == '\r' ||
+		r == '\f' || r == '\v' || r == 0x00A0 || // non-breaking space
+		r == 0x2028 || r == 0x2029 // line/paragraph separators
+}

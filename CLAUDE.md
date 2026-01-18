@@ -10,6 +10,7 @@ Festivus is a terminal-based text editor inspired by DOS EDIT, built with Go and
 - Bubbletea - TUI framework (MVU architecture)
 - Lipgloss - Styling
 - go-runewidth - Unicode width calculation
+- Chroma - Syntax highlighting
 
 ## Build & Run
 
@@ -20,15 +21,18 @@ go build
 
 ## Project Structure
 
-- `editor/` - Core editor logic (buffer, cursor, selection, undo)
+- `editor/` - Core editor logic (buffer, cursor, selection, undo, dialogs, file browser)
 - `ui/` - UI components (menubar, statusbar, viewport, styles)
-- `clipboard/` - Clipboard handling (OSC52 for SSH, local fallback)
+- `clipboard/` - Clipboard handling (native xclip/xsel/wl-clipboard, OSC52 for SSH)
+- `syntax/` - Syntax highlighting (Chroma-based)
+- `config/` - Configuration file handling
 
 ## Code Patterns
 
-- Use direct ANSI escape codes for menu bar, status bar, find bar backgrounds (lipgloss nesting causes color issues)
+- Use direct ANSI escape codes for menu bar, status bar, find/replace bar backgrounds (lipgloss nesting causes color issues)
 - Gap buffer for text storage
 - Visual line counting for word wrap positioning
+- Clipboard uses native tools (xclip/xsel/wl-clipboard) with OSC52 fallback for SSH
 
 ## Git Workflow
 

@@ -5,6 +5,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,6 +24,7 @@ const (
 	ModeNormal Mode = iota
 	ModeMenu
 	ModeFind
+	ModeFindReplace
 	ModePrompt
 	ModeHelp
 	ModeAbout
@@ -92,6 +94,7 @@ const (
 	PromptConfirmClose
 	PromptConfirmQuit
 	PromptConfirmOverwrite
+	PromptGoToLine
 )
 
 // FestivusQuotes are displayed randomly in the About dialog.
@@ -166,6 +169,10 @@ type Editor struct {
 	// Find mode state
 	findQuery  string
 	findActive bool
+
+	// Find and Replace mode state
+	replaceQuery string
+	replaceFocus bool // true = replace field, false = find field
 
 	// Prompt mode state
 	promptText      string       // The prompt message
@@ -393,6 +400,11 @@ func (e *Editor) updateViewportSize() {
 		viewportHeight--
 	}
 
+	// Subtract find/replace bar if active (2 lines)
+	if e.mode == ModeFindReplace {
+		viewportHeight -= 2
+	}
+
 	// Subtract prompt bar if active
 	if e.mode == ModePrompt {
 		viewportHeight--
@@ -417,6 +429,11 @@ func (e *Editor) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Handle find mode
 	if e.mode == ModeFind {
 		return e.handleFindKey(msg)
+	}
+
+	// Handle find/replace mode
+	if e.mode == ModeFindReplace {
+		return e.handleFindReplaceKey(msg)
 	}
 
 	// Handle prompt mode
@@ -510,6 +527,18 @@ func (e *Editor) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyCtrlL:
 		e.toggleLineNumbers()
+		return e, nil
+
+	case tea.KeyCtrlK:
+		e.cutLine()
+		return e, nil
+
+	case tea.KeyCtrlG:
+		e.showPrompt("Go to line: ", PromptGoToLine)
+		return e, nil
+
+	case tea.KeyCtrlH:
+		e.showFindReplace()
 		return e, nil
 
 	case tea.KeyCtrlHome:
@@ -719,22 +748,27 @@ func (e *Editor) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			switch msg.Runes[0] {
 			case 'f', 'F':
 				e.mode = ModeMenu
-				e.menubar.OpenMenu(0)
+				e.menubar.OpenMenu(0) // File
 				e.updateViewportSize()
 				return e, nil
 			case 'e', 'E':
 				e.mode = ModeMenu
-				e.menubar.OpenMenu(1)
+				e.menubar.OpenMenu(1) // Edit
+				e.updateViewportSize()
+				return e, nil
+			case 's', 'S':
+				e.mode = ModeMenu
+				e.menubar.OpenMenu(2) // Search
 				e.updateViewportSize()
 				return e, nil
 			case 'o', 'O':
 				e.mode = ModeMenu
-				e.menubar.OpenMenu(2)
+				e.menubar.OpenMenu(3) // Options
 				e.updateViewportSize()
 				return e, nil
 			case 'h', 'H':
 				e.mode = ModeMenu
-				e.menubar.OpenMenu(3)
+				e.menubar.OpenMenu(4) // Help
 				e.updateViewportSize()
 				return e, nil
 			}
@@ -760,14 +794,19 @@ func (e *Editor) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		e.menubar.OpenMenu(1) // Edit
 		e.updateViewportSize()
 		return e, nil
+	case "alt+s":
+		e.mode = ModeMenu
+		e.menubar.OpenMenu(2) // Search
+		e.updateViewportSize()
+		return e, nil
 	case "alt+o":
 		e.mode = ModeMenu
-		e.menubar.OpenMenu(2) // Options
+		e.menubar.OpenMenu(3) // Options
 		e.updateViewportSize()
 		return e, nil
 	case "alt+h":
 		e.mode = ModeMenu
-		e.menubar.OpenMenu(3) // Help
+		e.menubar.OpenMenu(4) // Help
 		e.updateViewportSize()
 		return e, nil
 	case "f10":
@@ -780,6 +819,9 @@ func (e *Editor) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return e, nil
 	case "f2":
 		e.insertLoremIpsum()
+		return e, nil
+	case "f3":
+		e.findNext()
 		return e, nil
 
 	// Fallback ctrl key handling (string-based)
@@ -827,6 +869,15 @@ func (e *Editor) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return e, nil
 	case "ctrl+l":
 		e.toggleLineNumbers()
+		return e, nil
+	case "ctrl+k":
+		e.cutLine()
+		return e, nil
+	case "ctrl+g":
+		e.showPrompt("Go to line: ", PromptGoToLine)
+		return e, nil
+	case "ctrl+h":
+		e.showFindReplace()
 		return e, nil
 
 	// Word movement
@@ -1067,6 +1118,31 @@ func (e *Editor) executePrompt() {
 		} else {
 			e.statusbar.SetMessage("Cancelled", "info")
 		}
+
+	case PromptGoToLine:
+		if input == "" {
+			e.statusbar.SetMessage("Cancelled", "info")
+			return
+		}
+		lineNum, err := strconv.Atoi(input)
+		if err != nil {
+			e.statusbar.SetMessage("Invalid line number", "error")
+			return
+		}
+		totalLines := e.buffer.LineCount()
+		if lineNum < 1 {
+			e.statusbar.SetMessage("Line number must be at least 1", "error")
+			return
+		}
+		if lineNum > totalLines {
+			e.statusbar.SetMessage(fmt.Sprintf("Line %d exceeds file length (%d lines)", lineNum, totalLines), "error")
+			return
+		}
+		// Convert to 0-indexed
+		e.cursor.SetPosition(lineNum-1, 0)
+		e.selection.Clear()
+		e.viewport.EnsureCursorVisibleWrapped(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
+		e.statusbar.SetMessage(fmt.Sprintf("Jumped to line %d", lineNum), "info")
 	}
 }
 
@@ -1207,6 +1283,8 @@ func (e *Editor) executeAction(action ui.MenuAction) (tea.Model, tea.Cmd) {
 		e.copy()
 	case ui.ActionPaste:
 		e.paste()
+	case ui.ActionCutLine:
+		e.cutLine()
 	case ui.ActionSelectAll:
 		e.selectAll()
 	case ui.ActionFind:
@@ -1214,6 +1292,12 @@ func (e *Editor) executeAction(action ui.MenuAction) (tea.Model, tea.Cmd) {
 		e.findQuery = ""
 		e.findActive = true
 		e.updateViewportSize()
+	case ui.ActionFindNext:
+		e.findNext()
+	case ui.ActionReplace:
+		e.showFindReplace()
+	case ui.ActionGoToLine:
+		e.showPrompt("Go to line: ", PromptGoToLine)
 	case ui.ActionWordWrap:
 		e.toggleWordWrap()
 	case ui.ActionLineNumbers:
@@ -1499,6 +1583,48 @@ func (e *Editor) cut() {
 	e.deleteSelection()
 }
 
+// cutLine cuts the entire current line (like nano's Ctrl+K)
+func (e *Editor) cutLine() {
+	line := e.cursor.Line()
+	lineStart := e.buffer.LineStartOffset(line)
+	lineEnd := e.buffer.LineEndOffset(line)
+
+	// Include the newline character if this isn't the last line
+	if lineEnd < e.buffer.Length() {
+		lineEnd++ // Include the \n
+	}
+
+	// If the line is empty and it's the only line, nothing to cut
+	if lineStart == lineEnd {
+		e.statusbar.SetMessage("Nothing to cut", "info")
+		return
+	}
+
+	// Get the line content
+	text := e.buffer.Substring(lineStart, lineEnd)
+
+	// Copy to clipboard
+	e.clipboard.Copy(text)
+
+	// Record for undo
+	entry := &UndoEntry{
+		Position:     lineStart,
+		Deleted:      text,
+		CursorBefore: e.cursor.ByteOffset(),
+		CursorAfter:  lineStart,
+	}
+
+	// Delete the line
+	e.buffer.Replace(lineStart, lineEnd, "")
+	e.cursor.SetByteOffset(lineStart)
+	e.selection.Clear()
+	e.undoStack.Push(entry)
+	e.modified = true
+
+	e.statusbar.SetMessage("Line cut", "info")
+	e.viewport.EnsureCursorVisibleWrapped(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
+}
+
 func (e *Editor) copy() {
 	if !e.selection.Active || e.selection.IsEmpty() {
 		return
@@ -1516,6 +1642,7 @@ func (e *Editor) paste() {
 	}
 
 	e.insertText(text)
+	e.viewport.EnsureCursorVisibleWrapped(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
 }
 
 func (e *Editor) selectAll() {
@@ -1672,6 +1799,158 @@ func (e *Editor) findNext() {
 	e.statusbar.SetMessage("Not found", "error")
 }
 
+// showFindReplace opens the find and replace bar
+func (e *Editor) showFindReplace() {
+	e.mode = ModeFindReplace
+	e.replaceFocus = false // Start with focus on find field
+	e.updateViewportSize()
+}
+
+// handleFindReplaceKey handles keyboard input in find/replace mode
+func (e *Editor) handleFindReplaceKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEsc:
+		e.mode = ModeNormal
+		e.updateViewportSize()
+		return e, nil
+
+	case tea.KeyTab:
+		// Switch between find and replace fields
+		e.replaceFocus = !e.replaceFocus
+		return e, nil
+
+	case tea.KeyEnter:
+		// Replace next occurrence
+		e.replaceNext()
+		return e, nil
+
+	case tea.KeyCtrlA:
+		// Replace all
+		e.replaceAll()
+		return e, nil
+
+	case tea.KeyBackspace:
+		if e.replaceFocus {
+			if len(e.replaceQuery) > 0 {
+				e.replaceQuery = e.replaceQuery[:len(e.replaceQuery)-1]
+			}
+		} else {
+			if len(e.findQuery) > 0 {
+				e.findQuery = e.findQuery[:len(e.findQuery)-1]
+			}
+		}
+		return e, nil
+
+	case tea.KeyRunes:
+		if e.replaceFocus {
+			e.replaceQuery += string(msg.Runes)
+		} else {
+			e.findQuery += string(msg.Runes)
+		}
+		return e, nil
+
+	case tea.KeySpace:
+		if e.replaceFocus {
+			e.replaceQuery += " "
+		} else {
+			e.findQuery += " "
+		}
+		return e, nil
+	}
+
+	// Handle string-based keys
+	switch msg.String() {
+	case "ctrl+a":
+		e.replaceAll()
+		return e, nil
+	}
+
+	return e, nil
+}
+
+// replaceNext finds the next occurrence and replaces it
+func (e *Editor) replaceNext() {
+	if e.findQuery == "" {
+		e.statusbar.SetMessage("No search term", "error")
+		return
+	}
+
+	content := e.buffer.String()
+	startPos := e.cursor.ByteOffset()
+
+	// Search from cursor position
+	idx := strings.Index(content[startPos:], e.findQuery)
+	if idx < 0 {
+		// Wrap around
+		idx = strings.Index(content[:startPos], e.findQuery)
+		if idx < 0 {
+			e.statusbar.SetMessage("Not found", "error")
+			return
+		}
+	} else {
+		idx = startPos + idx
+	}
+
+	// Create undo entry for the replacement
+	entry := &UndoEntry{
+		Position:     idx,
+		Deleted:      e.findQuery,
+		Inserted:     e.replaceQuery,
+		CursorBefore: e.cursor.ByteOffset(),
+		CursorAfter:  idx + len(e.replaceQuery),
+	}
+
+	// Perform the replacement
+	e.buffer.Replace(idx, idx+len(e.findQuery), e.replaceQuery)
+	e.cursor.SetByteOffset(idx + len(e.replaceQuery))
+	e.selection.Clear()
+	e.undoStack.Push(entry)
+	e.modified = true
+
+	e.statusbar.SetMessage("Replaced", "info")
+	e.viewport.EnsureCursorVisibleWrapped(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
+}
+
+// replaceAll replaces all occurrences with a single undo entry
+func (e *Editor) replaceAll() {
+	if e.findQuery == "" {
+		e.statusbar.SetMessage("No search term", "error")
+		return
+	}
+
+	content := e.buffer.String()
+	count := strings.Count(content, e.findQuery)
+	if count == 0 {
+		e.statusbar.SetMessage("Not found", "error")
+		return
+	}
+
+	// Store original content for undo
+	originalContent := content
+	cursorBefore := e.cursor.ByteOffset()
+
+	// Replace all occurrences
+	newContent := strings.ReplaceAll(content, e.findQuery, e.replaceQuery)
+
+	// Create a single undo entry for the entire operation
+	entry := &UndoEntry{
+		Position:     0,
+		Deleted:      originalContent,
+		Inserted:     newContent,
+		CursorBefore: cursorBefore,
+		CursorAfter:  0,
+	}
+
+	// Replace the entire buffer
+	e.buffer = NewBufferFromString(newContent)
+	e.cursor = NewCursor(e.buffer)
+	e.selection.Clear()
+	e.undoStack.Push(entry)
+	e.modified = true
+
+	e.statusbar.SetMessage(fmt.Sprintf("Replaced %d occurrences", count), "info")
+}
+
 // View implements tea.Model
 func (e *Editor) View() string {
 	var sb strings.Builder
@@ -1778,6 +2057,41 @@ func (e *Editor) View() string {
 		sb.WriteString("\033[0m\n")
 	}
 
+	// Find/Replace bar if active (two lines)
+	if e.mode == ModeFindReplace {
+		// Line 1: Find field
+		findCursor := ""
+		replaceCursor := ""
+		if !e.replaceFocus {
+			findCursor = "_"
+		} else {
+			replaceCursor = "_"
+		}
+		findLine := "Find: " + e.findQuery + findCursor
+		findPadding := e.width - len(findLine) + len(findCursor) // adjust for cursor char
+		if findPadding < 0 {
+			findPadding = 0
+		}
+		sb.WriteString("\033[44;97m") // Dark blue bg, white text
+		sb.WriteString(findLine)
+		sb.WriteString(strings.Repeat(" ", findPadding))
+		sb.WriteString("\033[0m\n")
+
+		// Line 2: Replace field with hints
+		replaceLine := "Replace: " + e.replaceQuery + replaceCursor
+		hints := " [Tab] Switch [Enter] Replace [Ctrl+A] All"
+		availSpace := e.width - len(replaceLine) + len(replaceCursor) - len(hints)
+		if availSpace < 0 {
+			availSpace = 0
+			hints = ""
+		}
+		sb.WriteString("\033[44;97m") // Dark blue bg, white text
+		sb.WriteString(replaceLine)
+		sb.WriteString(strings.Repeat(" ", availSpace))
+		sb.WriteString(hints)
+		sb.WriteString("\033[0m\n")
+	}
+
 	// Prompt bar if active
 	if e.mode == ModePrompt {
 		promptContent := e.promptText + e.promptInput + "_"
@@ -1796,6 +2110,7 @@ func (e *Editor) View() string {
 	e.statusbar.SetFilename(e.filename)
 	e.statusbar.SetModified(e.modified)
 	e.statusbar.SetTotalLines(e.buffer.LineCount())
+	e.statusbar.SetCounts(e.buffer.WordCount(), e.buffer.RuneCount())
 	sb.WriteString(e.statusbar.View())
 
 	return sb.String()
