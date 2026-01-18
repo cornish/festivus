@@ -45,7 +45,13 @@ var FestivusQuotes = []string{
 	"Serenity now!",
 	"The tradition of Festivus begins with the Airing of Grievances.",
 	"Until you pin me, George, Festivus is not over!",
-	"No bagels, no bagels, no bagels.",
+	"No bagel, no bagel, no bagel!",
+	"I find your belief system fascinating.",
+	"This new holiday is scratching me right where I itch.",
+	"Weren't there feats of strength that ended with you crying?",
+	"The pole. It requires no decoration.",
+	"We don't care and it shows.",
+	"You couldn't smooth a silk sheet with a hot babe in it.",
 }
 
 // Editor is the main Bubbletea model for the text editor
