@@ -67,6 +67,7 @@ func NewMenuBar(styles Styles) *MenuBar {
 					{Label: "New", Shortcut: "Ctrl+N", Action: ActionNew},
 					{Label: "Open", Shortcut: "Ctrl+O", Action: ActionOpen},
 					{Label: "Save", Shortcut: "Ctrl+S", Action: ActionSave},
+					{Label: "Save As", Shortcut: "", Action: ActionSaveAs},
 					{Label: "Revert", Shortcut: "", Action: ActionRevert},
 					{Label: "Exit", Shortcut: "Ctrl+Q", Action: ActionExit},
 				},
