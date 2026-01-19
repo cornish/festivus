@@ -9,8 +9,37 @@ import (
 
 // Config holds the editor configuration
 type Config struct {
-	Editor EditorConfig `toml:"editor"`
-	Theme  ThemeConfig  `toml:"theme"`
+	Editor      EditorConfig `toml:"editor"`
+	Theme       ThemeConfig  `toml:"theme"`
+	RecentFiles []string     `toml:"recent_files,omitempty"` // Recently opened files (max 10)
+}
+
+// MaxRecentFiles is the maximum number of recent files to track
+const MaxRecentFiles = 10
+
+// AddRecentFile adds a file to the recent files list
+func (c *Config) AddRecentFile(path string) {
+	// Make path absolute
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		absPath = path
+	}
+
+	// Remove if already in list (will re-add at top)
+	newList := make([]string, 0, MaxRecentFiles)
+	for _, f := range c.RecentFiles {
+		if f != absPath {
+			newList = append(newList, f)
+		}
+	}
+
+	// Add to front
+	c.RecentFiles = append([]string{absPath}, newList...)
+
+	// Trim to max
+	if len(c.RecentFiles) > MaxRecentFiles {
+		c.RecentFiles = c.RecentFiles[:MaxRecentFiles]
+	}
 }
 
 // EditorConfig holds editor-specific settings

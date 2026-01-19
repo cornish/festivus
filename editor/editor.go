@@ -31,6 +31,7 @@ const (
 	ModeFileBrowser
 	ModeSaveAs
 	ModeTheme
+	ModeRecentFiles
 )
 
 // FileEntry represents a file or directory in the file browser
@@ -214,6 +215,9 @@ type Editor struct {
 	themeList  []string // Available themes
 	themeIndex int      // Selected theme index
 
+	// Recent files dialog state
+	recentFilesIndex int // Selected index in recent files dialog
+
 	// Configuration
 	config *config.Config
 }
@@ -337,6 +341,12 @@ func (e *Editor) LoadFile(filename string) error {
 
 	// Update syntax highlighter for new file
 	e.highlighter.SetFile(filename)
+
+	// Track in recent files
+	if e.config != nil {
+		e.config.AddRecentFile(absPath)
+		go e.config.Save()
+	}
 
 	return nil
 }
@@ -510,6 +520,9 @@ func (e *Editor) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if e.mode == ModeTheme {
 			return e.handleThemeMouse(msg)
 		}
+		if e.mode == ModeRecentFiles {
+			return e.handleRecentFilesMouse(msg)
+		}
 		return e.handleMouse(msg)
 	}
 
@@ -582,6 +595,11 @@ func (e *Editor) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Handle theme selection mode
 	if e.mode == ModeTheme {
 		return e.handleThemeKey(msg)
+	}
+
+	// Handle recent files mode
+	if e.mode == ModeRecentFiles {
+		return e.handleRecentFilesKey(msg)
 	}
 
 	// Handle file browser mode
@@ -666,6 +684,10 @@ func (e *Editor) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyCtrlG:
 		e.showPrompt("Go to line: ", PromptGoToLine)
+		return e, nil
+
+	case tea.KeyCtrlR:
+		e.showRecentFiles()
 		return e, nil
 
 	case tea.KeyCtrlH:
@@ -1006,6 +1028,9 @@ func (e *Editor) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return e, nil
 	case "ctrl+g":
 		e.showPrompt("Go to line: ", PromptGoToLine)
+		return e, nil
+	case "ctrl+r":
+		e.showRecentFiles()
 		return e, nil
 	case "ctrl+h":
 		e.showFindReplace()
@@ -1394,6 +1419,8 @@ func (e *Editor) executeAction(action ui.MenuAction) (tea.Model, tea.Cmd) {
 		e.newFile()
 	case ui.ActionOpen:
 		e.openFile()
+	case ui.ActionRecentFiles:
+		e.showRecentFiles()
 	case ui.ActionClose:
 		e.closeFile()
 	case ui.ActionSave:
@@ -1668,6 +1695,139 @@ func (e *Editor) handleThemeMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	case tea.MouseButtonWheelDown:
 		if e.themeIndex < themeCount-1 {
 			e.themeIndex++
+		}
+	}
+
+	return e, nil
+}
+
+// showRecentFiles opens the recent files dialog
+func (e *Editor) showRecentFiles() {
+	if e.config == nil || len(e.config.RecentFiles) == 0 {
+		e.statusbar.SetMessage("No recent files", "info")
+		return
+	}
+	e.recentFilesIndex = 0
+	e.mode = ModeRecentFiles
+}
+
+// handleRecentFilesKey handles key events in the recent files dialog
+func (e *Editor) handleRecentFilesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	recentCount := 0
+	if e.config != nil {
+		recentCount = len(e.config.RecentFiles)
+	}
+
+	switch msg.Type {
+	case tea.KeyUp:
+		if e.recentFilesIndex > 0 {
+			e.recentFilesIndex--
+		}
+	case tea.KeyDown:
+		if e.recentFilesIndex < recentCount-1 {
+			e.recentFilesIndex++
+		}
+	case tea.KeyEnter:
+		// Open selected file
+		if e.recentFilesIndex >= 0 && e.recentFilesIndex < recentCount {
+			path := e.config.RecentFiles[e.recentFilesIndex]
+			if err := e.LoadFile(path); err != nil {
+				e.statusbar.SetMessage("Open failed: "+err.Error(), "error")
+			} else {
+				e.statusbar.SetMessage("Opened: "+path, "success")
+			}
+		}
+		e.mode = ModeNormal
+	case tea.KeyEsc:
+		e.mode = ModeNormal
+	case tea.KeyDelete, tea.KeyBackspace:
+		// Remove selected file from recent list
+		if e.recentFilesIndex >= 0 && e.recentFilesIndex < recentCount {
+			e.config.RecentFiles = append(
+				e.config.RecentFiles[:e.recentFilesIndex],
+				e.config.RecentFiles[e.recentFilesIndex+1:]...,
+			)
+			go e.config.Save()
+			// Adjust index if needed
+			if e.recentFilesIndex >= len(e.config.RecentFiles) {
+				e.recentFilesIndex = len(e.config.RecentFiles) - 1
+			}
+			// Close dialog if list is now empty
+			if len(e.config.RecentFiles) == 0 {
+				e.mode = ModeNormal
+				e.statusbar.SetMessage("Recent files cleared", "info")
+			}
+		}
+	}
+	return e, nil
+}
+
+// handleRecentFilesMouse handles mouse input in the recent files dialog
+func (e *Editor) handleRecentFilesMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	recentCount := 0
+	if e.config != nil {
+		recentCount = len(e.config.RecentFiles)
+	}
+	if recentCount == 0 {
+		return e, nil
+	}
+
+	// Calculate dialog position (must match overlayRecentFilesDialog)
+	boxWidth := 60
+	boxHeight := recentCount + 5 // title, empty, items..., empty, footer, bottom
+
+	startX := (e.width - boxWidth) / 2
+	startY := (e.viewport.Height() - boxHeight) / 2
+
+	// Adjust mouse Y for menu bar
+	mouseY := msg.Y - 1
+
+	// Calculate relative position within dialog
+	relX := msg.X - startX
+	relY := mouseY - startY
+
+	// Check if click is outside dialog - close it
+	if relX < 0 || relX >= boxWidth || relY < 0 || relY >= boxHeight {
+		if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress {
+			e.mode = ModeNormal
+		}
+		return e, nil
+	}
+
+	// File list starts at line 2 (after title border and empty line)
+	listStart := 2
+	listEnd := listStart + recentCount
+
+	switch msg.Button {
+	case tea.MouseButtonLeft:
+		if msg.Action == tea.MouseActionPress {
+			if relY >= listStart && relY < listEnd {
+				clickedIdx := relY - listStart
+				if clickedIdx >= 0 && clickedIdx < recentCount {
+					if e.recentFilesIndex == clickedIdx {
+						// Double-click effect: open file
+						path := e.config.RecentFiles[e.recentFilesIndex]
+						if err := e.LoadFile(path); err != nil {
+							e.statusbar.SetMessage("Open failed: "+err.Error(), "error")
+						} else {
+							e.statusbar.SetMessage("Opened: "+path, "success")
+						}
+						e.mode = ModeNormal
+					} else {
+						e.recentFilesIndex = clickedIdx
+					}
+				}
+			}
+		}
+
+	case tea.MouseButtonWheelUp:
+		if e.recentFilesIndex > 0 {
+			e.recentFilesIndex--
+		}
+
+	case tea.MouseButtonWheelDown:
+		if e.recentFilesIndex < recentCount-1 {
+			e.recentFilesIndex++
 		}
 	}
 
@@ -2334,6 +2494,11 @@ func (e *Editor) View() string {
 	// If theme selection dialog is open, overlay it centered on the viewport
 	if e.mode == ModeTheme {
 		viewportContent = e.overlayThemeDialog(viewportContent)
+	}
+
+	// If recent files dialog is open, overlay it centered on the viewport
+	if e.mode == ModeRecentFiles {
+		viewportContent = e.overlayRecentFilesDialog(viewportContent)
 	}
 
 	sb.WriteString(viewportContent)

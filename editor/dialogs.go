@@ -270,6 +270,7 @@ func (e *Editor) overlayHelpDialog(viewportContent string) string {
 		"  FILE",
 		"  Ctrl+N       New file",
 		"  Ctrl+O       Open file",
+		"  Ctrl+R       Recent files",
 		"  Ctrl+W       Close file",
 		"  Ctrl+S       Save file",
 		"  Ctrl+Q       Quit",
@@ -588,4 +589,45 @@ func atoi(s string) int {
 		}
 	}
 	return n
+}
+
+// overlayRecentFilesDialog overlays the recent files dialog using DialogBuilder
+func (e *Editor) overlayRecentFilesDialog(viewportContent string) string {
+	if e.config == nil || len(e.config.RecentFiles) == 0 {
+		return viewportContent
+	}
+
+	// Use DialogBuilder for consistent dialog rendering
+	db := e.NewDialogBuilder(60)
+
+	db.AddTitleBorder(" Recent Files ")
+	db.AddEmptyLine()
+
+	// Add recent files as selectable items
+	for i, path := range e.config.RecentFiles {
+		// Show just filename with truncated path
+		display := formatRecentPath(path, db.InnerWidth())
+		db.AddSelectableItem(display, i == e.recentFilesIndex)
+	}
+
+	db.AddEmptyLine()
+	db.AddCenteredText("[Enter] Open  [Del] Remove  [Esc] Cancel")
+	db.AddBottomBorder()
+
+	return db.Overlay(viewportContent, e.width, e.viewport.Height())
+}
+
+// formatRecentPath formats a path to fit within the given width
+func formatRecentPath(path string, maxWidth int) string {
+	// Try to show as much of the path as possible
+	if runewidth.StringWidth(path) <= maxWidth {
+		return path
+	}
+
+	// Truncate from the left, showing the end of the path
+	runes := []rune(path)
+	for len(runes) > 0 && runewidth.StringWidth("..."+string(runes)) > maxWidth {
+		runes = runes[1:]
+	}
+	return "..." + string(runes)
 }
