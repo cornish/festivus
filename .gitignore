@@ -2,6 +2,10 @@
 festivus
 *.exe
 
+# Backup files
+*~
+*~[0-9]~
+
 # IDE
 .idea/
 .vscode/

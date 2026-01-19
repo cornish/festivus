@@ -131,8 +131,8 @@ Festivus stores its configuration in `~/.config/festivus/config.toml`:
 word_wrap = false
 line_numbers = false
 syntax_highlight = true
-true_color = true      # Set to false for older terminals
-backup_on_save = false # Create filename~ backup before saving
+true_color = true   # Set to false for older terminals
+backup_count = 0    # 0=disabled, 1=filename~, 2+=numbered (filename~1~ newest)
 
 [theme]
 name = "default"  # or "dark", "light", "monokai", "nord", "dracula", "gruvbox", "solarized", "catppuccin"

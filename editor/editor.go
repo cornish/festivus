@@ -356,7 +356,7 @@ func (e *Editor) SaveFile() bool {
 // doSave performs the actual file save
 func (e *Editor) doSave() bool {
 	// Create backup if enabled and file exists
-	if e.config != nil && e.config.Editor.BackupOnSave {
+	if e.config != nil && e.config.Editor.BackupCount > 0 {
 		if err := e.createBackup(); err != nil {
 			e.statusbar.SetMessage("Backup failed: "+err.Error(), "error")
 			return false
@@ -380,7 +380,9 @@ func (e *Editor) doSave() bool {
 	return true
 }
 
-// createBackup creates a backup copy of the current file (filename~)
+// createBackup creates a backup copy of the current file
+// With backup_count=1: creates filename~
+// With backup_count>1: creates filename~1~ (newest) through filename~N~ (oldest)
 func (e *Editor) createBackup() error {
 	if e.filename == "" {
 		return nil // No file to backup
@@ -391,8 +393,7 @@ func (e *Editor) createBackup() error {
 		return nil // New file, nothing to backup
 	}
 
-	// Copy file to backup (filename~)
-	backupPath := e.filename + "~"
+	// Read current file content
 	src, err := os.ReadFile(e.filename)
 	if err != nil {
 		return err
@@ -405,13 +406,38 @@ func (e *Editor) createBackup() error {
 		mode = info.Mode()
 	}
 
-	return os.WriteFile(backupPath, src, mode)
+	backupCount := 1
+	if e.config != nil {
+		backupCount = e.config.Editor.BackupCount
+	}
+
+	if backupCount == 1 {
+		// Simple backup: filename~
+		return os.WriteFile(e.filename+"~", src, mode)
+	}
+
+	// Numbered backups: rotate existing backups
+	// Delete oldest backup if it exists
+	oldestBackup := fmt.Sprintf("%s~%d~", e.filename, backupCount)
+	os.Remove(oldestBackup) // Ignore error if doesn't exist
+
+	// Rotate backups: ~2~ becomes ~3~, ~1~ becomes ~2~, etc.
+	for i := backupCount - 1; i >= 1; i-- {
+		oldPath := fmt.Sprintf("%s~%d~", e.filename, i)
+		newPath := fmt.Sprintf("%s~%d~", e.filename, i+1)
+		if _, err := os.Stat(oldPath); err == nil {
+			os.Rename(oldPath, newPath)
+		}
+	}
+
+	// Write new backup as ~1~ (newest)
+	return os.WriteFile(fmt.Sprintf("%s~1~", e.filename), src, mode)
 }
 
 // doSaveInDialog performs file save, showing errors in the dialog instead of status bar
 func (e *Editor) doSaveInDialog() bool {
 	// Create backup if enabled and file exists
-	if e.config != nil && e.config.Editor.BackupOnSave {
+	if e.config != nil && e.config.Editor.BackupCount > 0 {
 		if err := e.createBackup(); err != nil {
 			e.fileBrowserError = "Backup failed: " + err.Error()
 			return false

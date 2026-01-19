@@ -20,7 +20,7 @@ type EditorConfig struct {
 	SyntaxHighlight bool  `toml:"syntax_highlight"`
 	TrueColor       *bool `toml:"true_color"`    // nil = auto (true), false = force 256-color
 	AsciiMode       *bool `toml:"ascii_mode"`    // nil = auto-detect, true/false = override
-	BackupOnSave    bool  `toml:"backup_on_save"` // Create filename~ backup before saving
+	BackupCount     int   `toml:"backup_count"`  // 0=disabled, 1=filename~, >1=filename~1~ through filename~N~
 }
 
 // ThemeConfig holds the theme reference in the main config
