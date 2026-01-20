@@ -146,29 +146,39 @@ var FestivusQuotes = []string{
 	"George, you're forgetting how much Festivus has meant to us all.",
 }
 
+// Document holds the state for a single open file/buffer
+type Document struct {
+	buffer      *Buffer
+	cursor      *Cursor
+	selection   *Selection
+	undoStack   *UndoStack
+	filename    string
+	modified    bool
+	scrollY     int // viewport scroll position for this document
+	highlighter *syntax.Highlighter
+}
+
 // Editor is the main Bubbletea model for the text editor
 type Editor struct {
-	// Core components
-	buffer    *Buffer
-	cursor    *Cursor
-	selection *Selection
-	undoStack *UndoStack
+	// Documents (multiple buffer support)
+	documents []*Document
+	activeIdx int
+
+	// Shared components
 	clipboard *clipboard.Clipboard
 
 	// UI components
 	menubar   *ui.MenuBar
 	statusbar *ui.StatusBar
 	viewport  *ui.Viewport
-	scrollbar   *ui.Scrollbar
+	scrollbar *ui.Scrollbar
 	styles    ui.Styles
 	box       BoxChars // Characters for drawing dialog boxes
 
 	// State
-	mode     Mode
-	filename string
-	modified bool
-	width    int
-	height   int
+	mode   Mode
+	width  int
+	height int
 
 	// Find mode state
 	findQuery  string
@@ -207,11 +217,8 @@ type Editor struct {
 	fileBrowserError    string      // Error message to display in dialog
 
 	// Save As state
-	saveAsFilename string // Filename input for Save As dialog
+	saveAsFilename     string // Filename input for Save As dialog
 	saveAsFocusBrowser bool   // true = focus on browser, false = focus on filename
-
-	// Syntax highlighting
-	highlighter *syntax.Highlighter
 
 	// Theme selection state
 	themeList       []string // Available themes
@@ -225,6 +232,14 @@ type Editor struct {
 	config *config.Config
 }
 
+// activeDoc returns the currently active document
+func (e *Editor) activeDoc() *Document {
+	if len(e.documents) == 0 {
+		return nil
+	}
+	return e.documents[e.activeIdx]
+}
+
 // New creates a new editor instance with default config
 func New() *Editor {
 	return NewWithConfig(config.DefaultConfig())
@@ -235,7 +250,6 @@ func NewWithConfig(cfg *config.Config) *Editor {
 	// Create styles from the configured theme
 	theme := cfg.Theme.GetResolved()
 	styles := ui.NewStyles(theme)
-	buf := NewBuffer()
 
 	// Determine ASCII mode: config override or auto-detect
 	asciiMode := !detectUTF8Support()
@@ -248,17 +262,27 @@ func NewWithConfig(cfg *config.Config) *Editor {
 		box = AsciiBoxChars
 	}
 
-	e := &Editor{
+	// Create the initial document
+	buf := NewBuffer()
+	doc := &Document{
 		buffer:      buf,
 		cursor:      NewCursor(buf),
 		selection:   NewSelection(),
 		undoStack:   NewUndoStack(1000),
+		highlighter: syntax.New(""), // Initialize with no file
+		filename:    "",
+		modified:    false,
+		scrollY:     0,
+	}
+
+	e := &Editor{
+		documents:   []*Document{doc},
+		activeIdx:   0,
 		clipboard:   clipboard.New(os.Stdout),
 		menubar:     ui.NewMenuBar(styles),
 		statusbar:   ui.NewStatusBar(styles),
 		viewport:    ui.NewViewport(styles),
-		scrollbar:     ui.NewScrollbar(styles),
-		highlighter: syntax.New(""), // Initialize with no file
+		scrollbar:   ui.NewScrollbar(styles),
 		styles:      styles,
 		box:         box,
 		mode:        ModeNormal,
@@ -282,10 +306,10 @@ func NewWithConfig(cfg *config.Config) *Editor {
 
 		// Apply syntax highlighting setting
 		if cfg.Editor.SyntaxHighlight {
-			e.highlighter.SetEnabled(true)
+			e.activeDoc().highlighter.SetEnabled(true)
 			e.menubar.SetItemLabel(ui.ActionSyntaxHighlight, "[x] Syntax Highlight")
 		} else {
-			e.highlighter.SetEnabled(false)
+			e.activeDoc().highlighter.SetEnabled(false)
 		}
 
 		// Apply true color setting (default is true)
@@ -302,7 +326,7 @@ func NewWithConfig(cfg *config.Config) *Editor {
 		e.viewport.SetScrollbarWidth(e.scrollbar.Width())
 
 		// Apply theme syntax colors
-		e.highlighter.SetColors(syntax.SyntaxColors{
+		e.activeDoc().highlighter.SetColors(syntax.SyntaxColors{
 			Keyword:  theme.Syntax.Keyword,
 			String:   theme.Syntax.String,
 			Comment:  theme.Syntax.Comment,
@@ -342,18 +366,18 @@ func (e *Editor) LoadFile(filename string) error {
 		absPath = filename // Fall back to original if Abs fails
 	}
 
-	e.buffer = NewBufferFromString(string(content))
-	e.cursor = NewCursor(e.buffer)
-	e.selection.Clear()
-	e.undoStack.Clear()
+	e.activeDoc().buffer = NewBufferFromString(string(content))
+	e.activeDoc().cursor = NewCursor(e.activeDoc().buffer)
+	e.activeDoc().selection.Clear()
+	e.activeDoc().undoStack.Clear()
 	e.viewport.SetScrollY(0) // Reset scroll position for new file
-	e.filename = absPath
-	e.modified = false
+	e.activeDoc().filename = absPath
+	e.activeDoc().modified = false
 	e.updateTitle()
 	e.updateMenuState()
 
 	// Update syntax highlighter for new file
-	e.highlighter.SetFile(filename)
+	e.activeDoc().highlighter.SetFile(filename)
 
 	// Track in recent files
 	if e.config != nil {
@@ -367,7 +391,7 @@ func (e *Editor) LoadFile(filename string) error {
 // SaveFile saves the buffer to the current filename
 // Returns true if save was initiated (might be async if prompting for filename)
 func (e *Editor) SaveFile() bool {
-	if e.filename == "" {
+	if e.activeDoc().filename == "" {
 		// No filename - prompt for one
 		e.showPrompt("Save as: ", PromptSaveAs)
 		return false
@@ -386,8 +410,8 @@ func (e *Editor) doSave() bool {
 		}
 	}
 
-	content := e.buffer.String()
-	err := os.WriteFile(e.filename, []byte(content), 0644)
+	content := e.activeDoc().buffer.String()
+	err := os.WriteFile(e.activeDoc().filename, []byte(content), 0644)
 	if err != nil {
 		// Clean up Go's error message for user display
 		errMsg := err.Error()
@@ -396,8 +420,8 @@ func (e *Editor) doSave() bool {
 		return false
 	}
 
-	e.modified = false
-	e.statusbar.SetMessage("Saved: "+e.filename, "success")
+	e.activeDoc().modified = false
+	e.statusbar.SetMessage("Saved: "+e.activeDoc().filename, "success")
 	e.updateTitle()
 	e.updateMenuState()
 	return true
@@ -407,23 +431,23 @@ func (e *Editor) doSave() bool {
 // With backup_count=1: creates filename~
 // With backup_count>1: creates filename~1~ (newest) through filename~N~ (oldest)
 func (e *Editor) createBackup() error {
-	if e.filename == "" {
+	if e.activeDoc().filename == "" {
 		return nil // No file to backup
 	}
 
 	// Check if file exists
-	if _, err := os.Stat(e.filename); os.IsNotExist(err) {
+	if _, err := os.Stat(e.activeDoc().filename); os.IsNotExist(err) {
 		return nil // New file, nothing to backup
 	}
 
 	// Read current file content
-	src, err := os.ReadFile(e.filename)
+	src, err := os.ReadFile(e.activeDoc().filename)
 	if err != nil {
 		return err
 	}
 
 	// Preserve original file permissions if possible
-	info, err := os.Stat(e.filename)
+	info, err := os.Stat(e.activeDoc().filename)
 	mode := os.FileMode(0644)
 	if err == nil {
 		mode = info.Mode()
@@ -436,25 +460,25 @@ func (e *Editor) createBackup() error {
 
 	if backupCount == 1 {
 		// Simple backup: filename~
-		return os.WriteFile(e.filename+"~", src, mode)
+		return os.WriteFile(e.activeDoc().filename+"~", src, mode)
 	}
 
 	// Numbered backups: rotate existing backups
 	// Delete oldest backup if it exists
-	oldestBackup := fmt.Sprintf("%s~%d~", e.filename, backupCount)
+	oldestBackup := fmt.Sprintf("%s~%d~", e.activeDoc().filename, backupCount)
 	os.Remove(oldestBackup) // Ignore error if doesn't exist
 
 	// Rotate backups: ~2~ becomes ~3~, ~1~ becomes ~2~, etc.
 	for i := backupCount - 1; i >= 1; i-- {
-		oldPath := fmt.Sprintf("%s~%d~", e.filename, i)
-		newPath := fmt.Sprintf("%s~%d~", e.filename, i+1)
+		oldPath := fmt.Sprintf("%s~%d~", e.activeDoc().filename, i)
+		newPath := fmt.Sprintf("%s~%d~", e.activeDoc().filename, i+1)
 		if _, err := os.Stat(oldPath); err == nil {
 			os.Rename(oldPath, newPath)
 		}
 	}
 
 	// Write new backup as ~1~ (newest)
-	return os.WriteFile(fmt.Sprintf("%s~1~", e.filename), src, mode)
+	return os.WriteFile(fmt.Sprintf("%s~1~", e.activeDoc().filename), src, mode)
 }
 
 // doSaveInDialog performs file save, showing errors in the dialog instead of status bar
@@ -467,8 +491,8 @@ func (e *Editor) doSaveInDialog() bool {
 		}
 	}
 
-	content := e.buffer.String()
-	err := os.WriteFile(e.filename, []byte(content), 0644)
+	content := e.activeDoc().buffer.String()
+	err := os.WriteFile(e.activeDoc().filename, []byte(content), 0644)
 	if err != nil {
 		// Clean up Go's error message for dialog display
 		errMsg := err.Error()
@@ -477,9 +501,9 @@ func (e *Editor) doSaveInDialog() bool {
 		return false
 	}
 
-	e.modified = false
+	e.activeDoc().modified = false
 	e.fileBrowserError = ""
-	e.statusbar.SetMessage("Saved: "+e.filename, "success")
+	e.statusbar.SetMessage("Saved: "+e.activeDoc().filename, "success")
 	e.updateMenuState()
 	return true
 }
@@ -635,7 +659,7 @@ func (e *Editor) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	// Ctrl key combinations
 	case tea.KeyCtrlC:
-		if e.selection.Active && !e.selection.IsEmpty() {
+		if e.activeDoc().selection.Active && !e.activeDoc().selection.IsEmpty() {
 			e.copy()
 		}
 		return e, nil
@@ -656,7 +680,7 @@ func (e *Editor) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return e, nil
 
 	case tea.KeyCtrlX:
-		if e.selection.Active && !e.selection.IsEmpty() {
+		if e.activeDoc().selection.Active && !e.activeDoc().selection.IsEmpty() {
 			e.cut()
 		}
 		return e, nil
@@ -709,94 +733,94 @@ func (e *Editor) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return e, nil
 
 	case tea.KeyCtrlHome:
-		e.selection.Clear()
-		e.cursor.MoveToStart()
-		e.viewport.EnsureCursorVisibleWrapped(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
+		e.activeDoc().selection.Clear()
+		e.activeDoc().cursor.MoveToStart()
+		e.viewport.EnsureCursorVisibleWrapped(e.activeDoc().buffer.Lines(), e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
 		return e, nil
 
 	case tea.KeyCtrlEnd:
-		e.selection.Clear()
-		e.cursor.MoveToEnd()
-		e.viewport.EnsureCursorVisibleWrapped(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
+		e.activeDoc().selection.Clear()
+		e.activeDoc().cursor.MoveToEnd()
+		e.viewport.EnsureCursorVisibleWrapped(e.activeDoc().buffer.Lines(), e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
 		return e, nil
 
 	// Shift+Arrow selection keys
 	case tea.KeyShiftLeft:
-		e.moveWithSelection(e.cursor.MoveLeft)
+		e.moveWithSelection(e.activeDoc().cursor.MoveLeft)
 		return e, nil
 
 	case tea.KeyShiftRight:
-		e.moveWithSelection(e.cursor.MoveRight)
+		e.moveWithSelection(e.activeDoc().cursor.MoveRight)
 		return e, nil
 
 	case tea.KeyShiftUp:
 		e.moveWithSelection(func() bool {
 			if e.viewport.WordWrap() {
-				newLine, newCol := e.viewport.MoveUpVisual(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
-				if newLine == e.cursor.Line() && newCol == e.cursor.Col() {
+				newLine, newCol := e.viewport.MoveUpVisual(e.activeDoc().buffer.Lines(), e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
+				if newLine == e.activeDoc().cursor.Line() && newCol == e.activeDoc().cursor.Col() {
 					return false
 				}
-				e.cursor.SetPosition(newLine, newCol)
+				e.activeDoc().cursor.SetPosition(newLine, newCol)
 				return true
 			}
-			return e.cursor.MoveUp()
+			return e.activeDoc().cursor.MoveUp()
 		})
 		return e, nil
 
 	case tea.KeyShiftDown:
 		e.moveWithSelection(func() bool {
 			if e.viewport.WordWrap() {
-				newLine, newCol := e.viewport.MoveDownVisual(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
-				if newLine == e.cursor.Line() && newCol == e.cursor.Col() {
+				newLine, newCol := e.viewport.MoveDownVisual(e.activeDoc().buffer.Lines(), e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
+				if newLine == e.activeDoc().cursor.Line() && newCol == e.activeDoc().cursor.Col() {
 					return false
 				}
-				e.cursor.SetPosition(newLine, newCol)
+				e.activeDoc().cursor.SetPosition(newLine, newCol)
 				return true
 			}
-			return e.cursor.MoveDown()
+			return e.activeDoc().cursor.MoveDown()
 		})
 		return e, nil
 
 	case tea.KeyShiftHome:
 		e.moveWithSelection(func() bool {
-			e.cursor.MoveToLineStart()
+			e.activeDoc().cursor.MoveToLineStart()
 			return true
 		})
 		return e, nil
 
 	case tea.KeyShiftEnd:
 		e.moveWithSelection(func() bool {
-			e.cursor.MoveToLineEnd()
+			e.activeDoc().cursor.MoveToLineEnd()
 			return true
 		})
 		return e, nil
 
 	// Ctrl+Shift combinations
 	case tea.KeyCtrlShiftLeft:
-		e.moveWithSelection(e.cursor.MoveWordLeft)
+		e.moveWithSelection(e.activeDoc().cursor.MoveWordLeft)
 		return e, nil
 
 	case tea.KeyCtrlShiftRight:
-		e.moveWithSelection(e.cursor.MoveWordRight)
+		e.moveWithSelection(e.activeDoc().cursor.MoveWordRight)
 		return e, nil
 
 	case tea.KeyCtrlShiftHome:
 		e.moveWithSelection(func() bool {
-			e.cursor.MoveToStart()
+			e.activeDoc().cursor.MoveToStart()
 			return true
 		})
 		return e, nil
 
 	case tea.KeyCtrlShiftEnd:
 		e.moveWithSelection(func() bool {
-			e.cursor.MoveToEnd()
+			e.activeDoc().cursor.MoveToEnd()
 			return true
 		})
 		return e, nil
 
 	// Regular navigation keys
 	case tea.KeyEsc:
-		e.selection.Clear()
+		e.activeDoc().selection.Clear()
 		if e.menubar.IsOpen() {
 			e.menubar.Close()
 			e.mode = ModeNormal
@@ -805,49 +829,49 @@ func (e *Editor) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return e, nil
 
 	case tea.KeyLeft:
-		e.selection.Clear()
-		e.cursor.MoveLeft()
-		e.viewport.EnsureCursorVisibleWrapped(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
+		e.activeDoc().selection.Clear()
+		e.activeDoc().cursor.MoveLeft()
+		e.viewport.EnsureCursorVisibleWrapped(e.activeDoc().buffer.Lines(), e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
 		return e, nil
 
 	case tea.KeyRight:
-		e.selection.Clear()
-		e.cursor.MoveRight()
-		e.viewport.EnsureCursorVisibleWrapped(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
+		e.activeDoc().selection.Clear()
+		e.activeDoc().cursor.MoveRight()
+		e.viewport.EnsureCursorVisibleWrapped(e.activeDoc().buffer.Lines(), e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
 		return e, nil
 
 	case tea.KeyUp:
-		e.selection.Clear()
+		e.activeDoc().selection.Clear()
 		if e.viewport.WordWrap() {
-			newLine, newCol := e.viewport.MoveUpVisual(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
-			e.cursor.SetPosition(newLine, newCol)
+			newLine, newCol := e.viewport.MoveUpVisual(e.activeDoc().buffer.Lines(), e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
+			e.activeDoc().cursor.SetPosition(newLine, newCol)
 		} else {
-			e.cursor.MoveUp()
+			e.activeDoc().cursor.MoveUp()
 		}
-		e.viewport.EnsureCursorVisibleWrapped(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
+		e.viewport.EnsureCursorVisibleWrapped(e.activeDoc().buffer.Lines(), e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
 		return e, nil
 
 	case tea.KeyDown:
-		e.selection.Clear()
+		e.activeDoc().selection.Clear()
 		if e.viewport.WordWrap() {
-			newLine, newCol := e.viewport.MoveDownVisual(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
-			e.cursor.SetPosition(newLine, newCol)
+			newLine, newCol := e.viewport.MoveDownVisual(e.activeDoc().buffer.Lines(), e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
+			e.activeDoc().cursor.SetPosition(newLine, newCol)
 		} else {
-			e.cursor.MoveDown()
+			e.activeDoc().cursor.MoveDown()
 		}
-		e.viewport.EnsureCursorVisibleWrapped(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
+		e.viewport.EnsureCursorVisibleWrapped(e.activeDoc().buffer.Lines(), e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
 		return e, nil
 
 	case tea.KeyHome:
-		e.selection.Clear()
-		e.cursor.MoveToLineStart()
-		e.viewport.EnsureCursorVisibleWrapped(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
+		e.activeDoc().selection.Clear()
+		e.activeDoc().cursor.MoveToLineStart()
+		e.viewport.EnsureCursorVisibleWrapped(e.activeDoc().buffer.Lines(), e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
 		return e, nil
 
 	case tea.KeyEnd:
-		e.selection.Clear()
-		e.cursor.MoveToLineEnd()
-		e.viewport.EnsureCursorVisibleWrapped(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
+		e.activeDoc().selection.Clear()
+		e.activeDoc().cursor.MoveToLineEnd()
+		e.viewport.EnsureCursorVisibleWrapped(e.activeDoc().buffer.Lines(), e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
 		return e, nil
 
 	case tea.KeyPgUp:
@@ -860,11 +884,11 @@ func (e *Editor) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Move cursor up by one page
 		pageSize := e.viewport.Height() - 1 // Keep 1 line of context
 		for i := 0; i < pageSize; i++ {
-			if !e.cursor.MoveUp() {
+			if !e.activeDoc().cursor.MoveUp() {
 				break
 			}
 		}
-		e.viewport.EnsureCursorVisibleWrapped(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
+		e.viewport.EnsureCursorVisibleWrapped(e.activeDoc().buffer.Lines(), e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
 		return e, nil
 
 	case tea.KeyPgDown:
@@ -877,27 +901,27 @@ func (e *Editor) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Move cursor down by one page
 		pageSize := e.viewport.Height() - 1 // Keep 1 line of context
 		for i := 0; i < pageSize; i++ {
-			if !e.cursor.MoveDown() {
+			if !e.activeDoc().cursor.MoveDown() {
 				break
 			}
 		}
-		e.viewport.EnsureCursorVisibleWrapped(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
+		e.viewport.EnsureCursorVisibleWrapped(e.activeDoc().buffer.Lines(), e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
 		return e, nil
 
 	// Text editing keys
 	case tea.KeyEnter:
 		e.insertChar('\n')
-		e.viewport.EnsureCursorVisibleWrapped(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
+		e.viewport.EnsureCursorVisibleWrapped(e.activeDoc().buffer.Lines(), e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
 		return e, nil
 
 	case tea.KeyTab:
 		e.insertText("\t")
-		e.viewport.EnsureCursorVisibleWrapped(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
+		e.viewport.EnsureCursorVisibleWrapped(e.activeDoc().buffer.Lines(), e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
 		return e, nil
 
 	case tea.KeyBackspace:
 		e.backspace()
-		e.viewport.EnsureCursorVisibleWrapped(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
+		e.viewport.EnsureCursorVisibleWrapped(e.activeDoc().buffer.Lines(), e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
 		return e, nil
 
 	case tea.KeyDelete:
@@ -906,7 +930,7 @@ func (e *Editor) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case tea.KeySpace:
 		e.insertChar(' ')
-		e.viewport.EnsureCursorVisibleWrapped(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
+		e.viewport.EnsureCursorVisibleWrapped(e.activeDoc().buffer.Lines(), e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
 		return e, nil
 
 	case tea.KeyRunes:
@@ -944,7 +968,7 @@ func (e *Editor) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		for _, r := range msg.Runes {
 			e.insertChar(r)
 		}
-		e.viewport.EnsureCursorVisibleWrapped(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
+		e.viewport.EnsureCursorVisibleWrapped(e.activeDoc().buffer.Lines(), e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
 		return e, nil
 	}
 
@@ -1004,12 +1028,12 @@ func (e *Editor) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		e.redo()
 		return e, nil
 	case "ctrl+x":
-		if e.selection.Active && !e.selection.IsEmpty() {
+		if e.activeDoc().selection.Active && !e.activeDoc().selection.IsEmpty() {
 			e.cut()
 		}
 		return e, nil
 	case "ctrl+c":
-		if e.selection.Active && !e.selection.IsEmpty() {
+		if e.activeDoc().selection.Active && !e.activeDoc().selection.IsEmpty() {
 			e.copy()
 		}
 		return e, nil
@@ -1052,78 +1076,78 @@ func (e *Editor) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Word movement
 	case "ctrl+left":
-		e.selection.Clear()
-		e.cursor.MoveWordLeft()
-		e.viewport.EnsureCursorVisibleWrapped(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
+		e.activeDoc().selection.Clear()
+		e.activeDoc().cursor.MoveWordLeft()
+		e.viewport.EnsureCursorVisibleWrapped(e.activeDoc().buffer.Lines(), e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
 		return e, nil
 	case "ctrl+right":
-		e.selection.Clear()
-		e.cursor.MoveWordRight()
-		e.viewport.EnsureCursorVisibleWrapped(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
+		e.activeDoc().selection.Clear()
+		e.activeDoc().cursor.MoveWordRight()
+		e.viewport.EnsureCursorVisibleWrapped(e.activeDoc().buffer.Lines(), e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
 		return e, nil
 
 	// Shift+arrow selection (string-based fallback)
 	case "shift+left":
-		e.moveWithSelection(e.cursor.MoveLeft)
+		e.moveWithSelection(e.activeDoc().cursor.MoveLeft)
 		return e, nil
 	case "shift+right":
-		e.moveWithSelection(e.cursor.MoveRight)
+		e.moveWithSelection(e.activeDoc().cursor.MoveRight)
 		return e, nil
 	case "shift+up":
 		e.moveWithSelection(func() bool {
 			if e.viewport.WordWrap() {
-				newLine, newCol := e.viewport.MoveUpVisual(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
-				if newLine == e.cursor.Line() && newCol == e.cursor.Col() {
+				newLine, newCol := e.viewport.MoveUpVisual(e.activeDoc().buffer.Lines(), e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
+				if newLine == e.activeDoc().cursor.Line() && newCol == e.activeDoc().cursor.Col() {
 					return false
 				}
-				e.cursor.SetPosition(newLine, newCol)
+				e.activeDoc().cursor.SetPosition(newLine, newCol)
 				return true
 			}
-			return e.cursor.MoveUp()
+			return e.activeDoc().cursor.MoveUp()
 		})
 		return e, nil
 	case "shift+down":
 		e.moveWithSelection(func() bool {
 			if e.viewport.WordWrap() {
-				newLine, newCol := e.viewport.MoveDownVisual(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
-				if newLine == e.cursor.Line() && newCol == e.cursor.Col() {
+				newLine, newCol := e.viewport.MoveDownVisual(e.activeDoc().buffer.Lines(), e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
+				if newLine == e.activeDoc().cursor.Line() && newCol == e.activeDoc().cursor.Col() {
 					return false
 				}
-				e.cursor.SetPosition(newLine, newCol)
+				e.activeDoc().cursor.SetPosition(newLine, newCol)
 				return true
 			}
-			return e.cursor.MoveDown()
+			return e.activeDoc().cursor.MoveDown()
 		})
 		return e, nil
 	case "shift+home":
 		e.moveWithSelection(func() bool {
-			e.cursor.MoveToLineStart()
+			e.activeDoc().cursor.MoveToLineStart()
 			return true
 		})
 		return e, nil
 	case "shift+end":
 		e.moveWithSelection(func() bool {
-			e.cursor.MoveToLineEnd()
+			e.activeDoc().cursor.MoveToLineEnd()
 			return true
 		})
 		return e, nil
 
 	// Ctrl+Shift combinations
 	case "ctrl+shift+left":
-		e.moveWithSelection(e.cursor.MoveWordLeft)
+		e.moveWithSelection(e.activeDoc().cursor.MoveWordLeft)
 		return e, nil
 	case "ctrl+shift+right":
-		e.moveWithSelection(e.cursor.MoveWordRight)
+		e.moveWithSelection(e.activeDoc().cursor.MoveWordRight)
 		return e, nil
 	case "ctrl+shift+home":
 		e.moveWithSelection(func() bool {
-			e.cursor.MoveToStart()
+			e.activeDoc().cursor.MoveToStart()
 			return true
 		})
 		return e, nil
 	case "ctrl+shift+end":
 		e.moveWithSelection(func() bool {
-			e.cursor.MoveToEnd()
+			e.activeDoc().cursor.MoveToEnd()
 			return true
 		})
 		return e, nil
@@ -1134,12 +1158,12 @@ func (e *Editor) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // moveWithSelection moves the cursor while extending the selection
 func (e *Editor) moveWithSelection(move func() bool) {
-	if !e.selection.Active {
-		e.selection.Start(e.cursor.ByteOffset())
+	if !e.activeDoc().selection.Active {
+		e.activeDoc().selection.Start(e.activeDoc().cursor.ByteOffset())
 	}
 	move()
-	e.selection.Update(e.cursor.ByteOffset())
-	e.viewport.EnsureCursorVisibleWrapped(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
+	e.activeDoc().selection.Update(e.activeDoc().cursor.ByteOffset())
+	e.viewport.EnsureCursorVisibleWrapped(e.activeDoc().buffer.Lines(), e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
 }
 
 // handleMenuKey handles keyboard input in menu mode
@@ -1234,7 +1258,7 @@ func (e *Editor) executePrompt() {
 				e.mode = ModePrompt // Stay in prompt mode
 				return
 			}
-			e.filename = input
+			e.activeDoc().filename = input
 			e.doSave()
 		} else {
 			e.statusbar.SetMessage("Save cancelled - no filename", "info")
@@ -1242,7 +1266,7 @@ func (e *Editor) executePrompt() {
 
 	case PromptConfirmOverwrite:
 		if strings.ToLower(input) == "y" || strings.ToLower(input) == "yes" {
-			e.filename = e.pendingFilename
+			e.activeDoc().filename = e.pendingFilename
 			e.doSave()
 		} else {
 			e.statusbar.SetMessage("Save cancelled", "info")
@@ -1269,7 +1293,7 @@ func (e *Editor) executePrompt() {
 
 	case PromptConfirmOpen:
 		if strings.ToLower(input) == "y" || strings.ToLower(input) == "yes" {
-			e.modified = false // Discard changes
+			e.activeDoc().modified = false // Discard changes
 			e.showFileBrowser()
 		} else {
 			e.statusbar.SetMessage("Cancelled", "info")
@@ -1299,7 +1323,7 @@ func (e *Editor) executePrompt() {
 			e.statusbar.SetMessage("Invalid line number", "error")
 			return
 		}
-		totalLines := e.buffer.LineCount()
+		totalLines := e.activeDoc().buffer.LineCount()
 		if lineNum < 1 {
 			e.statusbar.SetMessage("Line number must be at least 1", "error")
 			return
@@ -1309,9 +1333,9 @@ func (e *Editor) executePrompt() {
 			return
 		}
 		// Convert to 0-indexed
-		e.cursor.SetPosition(lineNum-1, 0)
-		e.selection.Clear()
-		e.viewport.EnsureCursorVisibleWrapped(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
+		e.activeDoc().cursor.SetPosition(lineNum-1, 0)
+		e.activeDoc().selection.Clear()
+		e.viewport.EnsureCursorVisibleWrapped(e.activeDoc().buffer.Lines(), e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
 		e.statusbar.SetMessage(fmt.Sprintf("Jumped to line %d", lineNum), "info")
 
 	case PromptThemeCopyName:
@@ -1411,7 +1435,7 @@ func (e *Editor) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			if e.scrollbar.IsEnabled() && y >= 0 && y < e.viewport.Height() {
 				scrollbarStartX := e.width - e.scrollbar.Width()
 				if msg.X >= scrollbarStartX {
-					lines := e.buffer.Lines()
+					lines := e.activeDoc().buffer.Lines()
 
 					// Calculate total lines - use visual lines if word wrap is enabled
 					totalLines := len(lines)
@@ -1430,18 +1454,18 @@ func (e *Editor) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 						targetLine = visualLine
 					}
 
-					e.cursor.SetPosition(targetLine, 0)
-					e.selection.Clear()
-					e.viewport.EnsureCursorVisibleWrapped(lines, e.cursor.Line(), e.cursor.Col())
+					e.activeDoc().cursor.SetPosition(targetLine, 0)
+					e.activeDoc().selection.Clear()
+					e.viewport.EnsureCursorVisibleWrapped(lines, e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
 					return e, nil
 				}
 			}
 
 			// Handle click in editor area
 			if y >= 0 && y < e.viewport.Height() {
-				line, col := e.viewport.PositionFromClickWrapped(e.buffer.Lines(), msg.X, y)
-				e.cursor.SetPosition(line, col)
-				e.selection.Clear()
+				line, col := e.viewport.PositionFromClickWrapped(e.activeDoc().buffer.Lines(), msg.X, y)
+				e.activeDoc().cursor.SetPosition(line, col)
+				e.activeDoc().selection.Clear()
 				e.mouseDown = true
 				e.mouseStartX = msg.X
 				e.mouseStartY = y
@@ -1451,14 +1475,14 @@ func (e *Editor) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		} else if msg.Action == tea.MouseActionMotion && e.mouseDown {
 			// Drag selection
 			if y >= 0 && y < e.viewport.Height() {
-				if !e.selection.Active {
-					startLine, startCol := e.viewport.PositionFromClickWrapped(e.buffer.Lines(), e.mouseStartX, e.mouseStartY)
-					startPos := e.buffer.LineColToPosition(startLine, startCol)
-					e.selection.Start(startPos)
+				if !e.activeDoc().selection.Active {
+					startLine, startCol := e.viewport.PositionFromClickWrapped(e.activeDoc().buffer.Lines(), e.mouseStartX, e.mouseStartY)
+					startPos := e.activeDoc().buffer.LineColToPosition(startLine, startCol)
+					e.activeDoc().selection.Start(startPos)
 				}
-				line, col := e.viewport.PositionFromClickWrapped(e.buffer.Lines(), msg.X, y)
-				e.cursor.SetPosition(line, col)
-				e.selection.Update(e.cursor.ByteOffset())
+				line, col := e.viewport.PositionFromClickWrapped(e.activeDoc().buffer.Lines(), msg.X, y)
+				e.activeDoc().cursor.SetPosition(line, col)
+				e.activeDoc().selection.Update(e.activeDoc().cursor.ByteOffset())
 			}
 		}
 
@@ -1466,7 +1490,7 @@ func (e *Editor) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		e.viewport.ScrollUp()
 
 	case tea.MouseButtonWheelDown:
-		e.viewport.ScrollDownWrapped(e.buffer.Lines())
+		e.viewport.ScrollDownWrapped(e.activeDoc().buffer.Lines())
 	}
 
 	return e, nil
@@ -1549,7 +1573,7 @@ func (e *Editor) toggleWordWrap() {
 	}
 
 	// Ensure cursor stays visible after toggle
-	e.viewport.EnsureCursorVisibleWrapped(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
+	e.viewport.EnsureCursorVisibleWrapped(e.activeDoc().buffer.Lines(), e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
 
 	// Save to config
 	e.saveConfig()
@@ -1570,7 +1594,7 @@ func (e *Editor) toggleLineNumbers() {
 	}
 
 	// Ensure cursor stays visible after toggle (text width changes)
-	e.viewport.EnsureCursorVisibleWrapped(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
+	e.viewport.EnsureCursorVisibleWrapped(e.activeDoc().buffer.Lines(), e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
 
 	// Save to config
 	e.saveConfig()
@@ -1578,8 +1602,8 @@ func (e *Editor) toggleLineNumbers() {
 
 // toggleSyntaxHighlight toggles syntax highlighting on/off
 func (e *Editor) toggleSyntaxHighlight() {
-	enabled := !e.highlighter.Enabled()
-	e.highlighter.SetEnabled(enabled)
+	enabled := !e.activeDoc().highlighter.Enabled()
+	e.activeDoc().highlighter.SetEnabled(enabled)
 
 	// Update menu checkbox
 	if enabled {
@@ -1611,7 +1635,7 @@ func (e *Editor) toggleScrollbar() {
 	}
 
 	// Ensure cursor stays visible after toggle (text width changes)
-	e.viewport.EnsureCursorVisibleWrapped(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
+	e.viewport.EnsureCursorVisibleWrapped(e.activeDoc().buffer.Lines(), e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
 
 	// Save to config
 	e.saveConfig()
@@ -1624,7 +1648,7 @@ func (e *Editor) saveConfig() {
 	}
 	e.config.Editor.WordWrap = e.viewport.WordWrap()
 	e.config.Editor.LineNumbers = e.viewport.ShowLineNum()
-	e.config.Editor.SyntaxHighlight = e.highlighter.Enabled()
+	e.config.Editor.SyntaxHighlight = e.activeDoc().highlighter.Enabled()
 	e.config.Editor.Scrollbar = e.scrollbar.IsEnabled()
 	// Save in background - don't block the UI
 	go e.config.Save()
@@ -1646,7 +1670,7 @@ func (e *Editor) applyTheme(themeName string) {
 	e.styles = styles
 
 	// Update syntax highlighter colors
-	e.highlighter.SetColors(syntax.SyntaxColors{
+	e.activeDoc().highlighter.SetColors(syntax.SyntaxColors{
 		Keyword:  theme.Syntax.Keyword,
 		String:   theme.Syntax.String,
 		Comment:  theme.Syntax.Comment,
@@ -1961,24 +1985,24 @@ func (e *Editor) showAbout() {
 
 func (e *Editor) insertChar(r rune) {
 	// Delete selection first if any
-	if e.selection.Active && !e.selection.IsEmpty() {
+	if e.activeDoc().selection.Active && !e.activeDoc().selection.IsEmpty() {
 		e.deleteSelection()
 	}
 
 	// Record for undo
 	entry := &UndoEntry{
-		Position:     e.cursor.ByteOffset(),
+		Position:     e.activeDoc().cursor.ByteOffset(),
 		Inserted:     string(r),
-		CursorBefore: e.cursor.ByteOffset(),
+		CursorBefore: e.activeDoc().cursor.ByteOffset(),
 	}
 
-	e.cursor.Sync()
-	e.buffer.InsertRune(r)
-	e.cursor.MoveRight()
+	e.activeDoc().cursor.Sync()
+	e.activeDoc().buffer.InsertRune(r)
+	e.activeDoc().cursor.MoveRight()
 
-	entry.CursorAfter = e.cursor.ByteOffset()
-	e.undoStack.Push(entry)
-	e.modified = true
+	entry.CursorAfter = e.activeDoc().cursor.ByteOffset()
+	e.activeDoc().undoStack.Push(entry)
+	e.activeDoc().modified = true
 }
 
 func (e *Editor) insertText(s string) {
@@ -1987,48 +2011,48 @@ func (e *Editor) insertText(s string) {
 	}
 
 	// Delete selection first if any
-	if e.selection.Active && !e.selection.IsEmpty() {
+	if e.activeDoc().selection.Active && !e.activeDoc().selection.IsEmpty() {
 		e.deleteSelection()
 	}
 
 	entry := &UndoEntry{
-		Position:     e.cursor.ByteOffset(),
+		Position:     e.activeDoc().cursor.ByteOffset(),
 		Inserted:     s,
-		CursorBefore: e.cursor.ByteOffset(),
+		CursorBefore: e.activeDoc().cursor.ByteOffset(),
 	}
 
-	e.cursor.Sync()
-	e.buffer.Insert(s)
-	e.cursor.SetByteOffset(e.cursor.ByteOffset() + len(s))
+	e.activeDoc().cursor.Sync()
+	e.activeDoc().buffer.Insert(s)
+	e.activeDoc().cursor.SetByteOffset(e.activeDoc().cursor.ByteOffset() + len(s))
 
-	entry.CursorAfter = e.cursor.ByteOffset()
-	e.undoStack.Push(entry)
-	e.modified = true
+	entry.CursorAfter = e.activeDoc().cursor.ByteOffset()
+	e.activeDoc().undoStack.Push(entry)
+	e.activeDoc().modified = true
 }
 
 func (e *Editor) backspace() {
-	if e.selection.Active && !e.selection.IsEmpty() {
+	if e.activeDoc().selection.Active && !e.activeDoc().selection.IsEmpty() {
 		e.deleteSelection()
 		return
 	}
 
-	if e.cursor.ByteOffset() == 0 {
+	if e.activeDoc().cursor.ByteOffset() == 0 {
 		return
 	}
 
 	// Sync cursor position to buffer gap
-	e.cursor.Sync()
+	e.activeDoc().cursor.Sync()
 
 	// Get info about what we're about to delete (the rune before cursor)
-	pos := e.cursor.ByteOffset()
-	deleted := e.buffer.DeleteRuneBefore()
+	pos := e.activeDoc().cursor.ByteOffset()
+	deleted := e.activeDoc().buffer.DeleteRuneBefore()
 	if deleted == "" {
 		return
 	}
 
 	// Update cursor position to match new gap position
-	newPos := e.buffer.CursorPosition()
-	e.cursor.SetByteOffset(newPos)
+	newPos := e.activeDoc().buffer.CursorPosition()
+	e.activeDoc().cursor.SetByteOffset(newPos)
 
 	entry := &UndoEntry{
 		Position:     newPos,
@@ -2037,62 +2061,62 @@ func (e *Editor) backspace() {
 		CursorAfter:  newPos,
 	}
 
-	e.undoStack.Push(entry)
-	e.modified = true
+	e.activeDoc().undoStack.Push(entry)
+	e.activeDoc().modified = true
 }
 
 func (e *Editor) delete() {
-	if e.selection.Active && !e.selection.IsEmpty() {
+	if e.activeDoc().selection.Active && !e.activeDoc().selection.IsEmpty() {
 		e.deleteSelection()
 		return
 	}
 
-	if e.cursor.ByteOffset() >= e.buffer.Length() {
+	if e.activeDoc().cursor.ByteOffset() >= e.activeDoc().buffer.Length() {
 		return
 	}
 
-	_, size := e.buffer.RuneAt(e.cursor.ByteOffset())
+	_, size := e.activeDoc().buffer.RuneAt(e.activeDoc().cursor.ByteOffset())
 	if size == 0 {
 		return
 	}
 
 	entry := &UndoEntry{
-		Position:     e.cursor.ByteOffset(),
-		Deleted:      e.buffer.Substring(e.cursor.ByteOffset(), e.cursor.ByteOffset()+size),
-		CursorBefore: e.cursor.ByteOffset(),
-		CursorAfter:  e.cursor.ByteOffset(),
+		Position:     e.activeDoc().cursor.ByteOffset(),
+		Deleted:      e.activeDoc().buffer.Substring(e.activeDoc().cursor.ByteOffset(), e.activeDoc().cursor.ByteOffset()+size),
+		CursorBefore: e.activeDoc().cursor.ByteOffset(),
+		CursorAfter:  e.activeDoc().cursor.ByteOffset(),
 	}
 
-	e.cursor.Sync()
-	e.buffer.DeleteAfter(size)
-	e.undoStack.Push(entry)
-	e.modified = true
+	e.activeDoc().cursor.Sync()
+	e.activeDoc().buffer.DeleteAfter(size)
+	e.activeDoc().undoStack.Push(entry)
+	e.activeDoc().modified = true
 }
 
 func (e *Editor) deleteSelection() {
-	if !e.selection.Active || e.selection.IsEmpty() {
+	if !e.activeDoc().selection.Active || e.activeDoc().selection.IsEmpty() {
 		return
 	}
 
-	start, end := e.selection.Normalize()
-	text := e.buffer.Substring(start, end)
+	start, end := e.activeDoc().selection.Normalize()
+	text := e.activeDoc().buffer.Substring(start, end)
 
 	entry := &UndoEntry{
 		Position:     start,
 		Deleted:      text,
-		CursorBefore: e.cursor.ByteOffset(),
+		CursorBefore: e.activeDoc().cursor.ByteOffset(),
 		CursorAfter:  start,
 	}
 
-	e.buffer.Replace(start, end, "")
-	e.cursor.SetByteOffset(start)
-	e.selection.Clear()
-	e.undoStack.Push(entry)
-	e.modified = true
+	e.activeDoc().buffer.Replace(start, end, "")
+	e.activeDoc().cursor.SetByteOffset(start)
+	e.activeDoc().selection.Clear()
+	e.activeDoc().undoStack.Push(entry)
+	e.activeDoc().modified = true
 }
 
 func (e *Editor) undo() {
-	entry := e.undoStack.Undo()
+	entry := e.activeDoc().undoStack.Undo()
 	if entry == nil {
 		return
 	}
@@ -2100,21 +2124,21 @@ func (e *Editor) undo() {
 	// Reverse the operation
 	if entry.Inserted != "" {
 		// Was an insertion - delete it
-		e.buffer.Replace(entry.Position, entry.Position+len(entry.Inserted), "")
+		e.activeDoc().buffer.Replace(entry.Position, entry.Position+len(entry.Inserted), "")
 	}
 	if entry.Deleted != "" {
 		// Was a deletion - insert it back
-		e.buffer.MoveCursor(entry.Position)
-		e.buffer.Insert(entry.Deleted)
+		e.activeDoc().buffer.MoveCursor(entry.Position)
+		e.activeDoc().buffer.Insert(entry.Deleted)
 	}
 
-	e.cursor.SetByteOffset(entry.CursorBefore)
-	e.selection.Clear()
-	e.modified = true
+	e.activeDoc().cursor.SetByteOffset(entry.CursorBefore)
+	e.activeDoc().selection.Clear()
+	e.activeDoc().modified = true
 }
 
 func (e *Editor) redo() {
-	entry := e.undoStack.Redo()
+	entry := e.activeDoc().undoStack.Redo()
 	if entry == nil {
 		return
 	}
@@ -2122,37 +2146,37 @@ func (e *Editor) redo() {
 	// Replay the operation
 	if entry.Deleted != "" {
 		// Was a deletion - delete it again
-		e.buffer.Replace(entry.Position, entry.Position+len(entry.Deleted), "")
+		e.activeDoc().buffer.Replace(entry.Position, entry.Position+len(entry.Deleted), "")
 	}
 	if entry.Inserted != "" {
 		// Was an insertion - insert it again
-		e.buffer.MoveCursor(entry.Position)
-		e.buffer.Insert(entry.Inserted)
+		e.activeDoc().buffer.MoveCursor(entry.Position)
+		e.activeDoc().buffer.Insert(entry.Inserted)
 	}
 
-	e.cursor.SetByteOffset(entry.CursorAfter)
-	e.selection.Clear()
-	e.modified = true
+	e.activeDoc().cursor.SetByteOffset(entry.CursorAfter)
+	e.activeDoc().selection.Clear()
+	e.activeDoc().modified = true
 }
 
 func (e *Editor) cut() {
-	if !e.selection.Active || e.selection.IsEmpty() {
+	if !e.activeDoc().selection.Active || e.activeDoc().selection.IsEmpty() {
 		return
 	}
 
-	text := e.selection.GetText(e.buffer)
+	text := e.activeDoc().selection.GetText(e.activeDoc().buffer)
 	e.clipboard.Copy(text)
 	e.deleteSelection()
 }
 
 // cutLine cuts the entire current line (like nano's Ctrl+K)
 func (e *Editor) cutLine() {
-	line := e.cursor.Line()
-	lineStart := e.buffer.LineStartOffset(line)
-	lineEnd := e.buffer.LineEndOffset(line)
+	line := e.activeDoc().cursor.Line()
+	lineStart := e.activeDoc().buffer.LineStartOffset(line)
+	lineEnd := e.activeDoc().buffer.LineEndOffset(line)
 
 	// Include the newline character if this isn't the last line
-	if lineEnd < e.buffer.Length() {
+	if lineEnd < e.activeDoc().buffer.Length() {
 		lineEnd++ // Include the \n
 	}
 
@@ -2163,7 +2187,7 @@ func (e *Editor) cutLine() {
 	}
 
 	// Get the line content
-	text := e.buffer.Substring(lineStart, lineEnd)
+	text := e.activeDoc().buffer.Substring(lineStart, lineEnd)
 
 	// Copy to clipboard
 	e.clipboard.Copy(text)
@@ -2172,27 +2196,27 @@ func (e *Editor) cutLine() {
 	entry := &UndoEntry{
 		Position:     lineStart,
 		Deleted:      text,
-		CursorBefore: e.cursor.ByteOffset(),
+		CursorBefore: e.activeDoc().cursor.ByteOffset(),
 		CursorAfter:  lineStart,
 	}
 
 	// Delete the line
-	e.buffer.Replace(lineStart, lineEnd, "")
-	e.cursor.SetByteOffset(lineStart)
-	e.selection.Clear()
-	e.undoStack.Push(entry)
-	e.modified = true
+	e.activeDoc().buffer.Replace(lineStart, lineEnd, "")
+	e.activeDoc().cursor.SetByteOffset(lineStart)
+	e.activeDoc().selection.Clear()
+	e.activeDoc().undoStack.Push(entry)
+	e.activeDoc().modified = true
 
 	e.statusbar.SetMessage("Line cut", "info")
-	e.viewport.EnsureCursorVisibleWrapped(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
+	e.viewport.EnsureCursorVisibleWrapped(e.activeDoc().buffer.Lines(), e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
 }
 
 func (e *Editor) copy() {
-	if !e.selection.Active || e.selection.IsEmpty() {
+	if !e.activeDoc().selection.Active || e.activeDoc().selection.IsEmpty() {
 		return
 	}
 
-	text := e.selection.GetText(e.buffer)
+	text := e.activeDoc().selection.GetText(e.activeDoc().buffer)
 	e.clipboard.Copy(text)
 	e.statusbar.SetMessage("Copied", "info")
 }
@@ -2204,17 +2228,17 @@ func (e *Editor) paste() {
 	}
 
 	e.insertText(text)
-	e.viewport.EnsureCursorVisibleWrapped(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
+	e.viewport.EnsureCursorVisibleWrapped(e.activeDoc().buffer.Lines(), e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
 }
 
 func (e *Editor) selectAll() {
-	e.selection.SelectAll(e.buffer)
-	e.cursor.MoveToEnd()
+	e.activeDoc().selection.SelectAll(e.activeDoc().buffer)
+	e.activeDoc().cursor.MoveToEnd()
 }
 
 func (e *Editor) newFile() {
 	// Check for unsaved changes
-	if e.modified {
+	if e.activeDoc().modified {
 		e.showPrompt("Unsaved changes. Discard? (y/n): ", PromptConfirmNew)
 		return
 	}
@@ -2222,13 +2246,13 @@ func (e *Editor) newFile() {
 }
 
 func (e *Editor) doNewFile() {
-	e.buffer = NewBuffer()
-	e.cursor = NewCursor(e.buffer)
-	e.selection.Clear()
-	e.undoStack.Clear()
-	e.filename = ""
-	e.modified = false
-	e.highlighter.SetFile("") // Clear syntax highlighter
+	e.activeDoc().buffer = NewBuffer()
+	e.activeDoc().cursor = NewCursor(e.activeDoc().buffer)
+	e.activeDoc().selection.Clear()
+	e.activeDoc().undoStack.Clear()
+	e.activeDoc().filename = ""
+	e.activeDoc().modified = false
+	e.activeDoc().highlighter.SetFile("") // Clear syntax highlighter
 	e.updateTitle()
 	e.updateMenuState()
 	e.statusbar.SetMessage("New file", "info")
@@ -2236,7 +2260,7 @@ func (e *Editor) doNewFile() {
 
 // closeFile closes the current file (same as new, but different messaging)
 func (e *Editor) closeFile() {
-	if e.modified {
+	if e.activeDoc().modified {
 		e.showPrompt("Unsaved changes. Discard? (y/n): ", PromptConfirmClose)
 		return
 	}
@@ -2244,13 +2268,13 @@ func (e *Editor) closeFile() {
 }
 
 func (e *Editor) doCloseFile() {
-	e.buffer = NewBuffer()
-	e.cursor = NewCursor(e.buffer)
-	e.selection.Clear()
-	e.undoStack.Clear()
-	e.filename = ""
-	e.modified = false
-	e.highlighter.SetFile("")
+	e.activeDoc().buffer = NewBuffer()
+	e.activeDoc().cursor = NewCursor(e.activeDoc().buffer)
+	e.activeDoc().selection.Clear()
+	e.activeDoc().undoStack.Clear()
+	e.activeDoc().filename = ""
+	e.activeDoc().modified = false
+	e.activeDoc().highlighter.SetFile("")
 	e.updateTitle()
 	e.updateMenuState()
 	e.statusbar.SetMessage("File closed", "info")
@@ -2258,7 +2282,7 @@ func (e *Editor) doCloseFile() {
 
 // quitEditor exits the editor, checking for unsaved changes
 func (e *Editor) quitEditor() tea.Cmd {
-	if e.modified {
+	if e.activeDoc().modified {
 		e.showPrompt("Unsaved changes. Quit anyway? (y/n): ", PromptConfirmQuit)
 		return nil
 	}
@@ -2268,8 +2292,8 @@ func (e *Editor) quitEditor() tea.Cmd {
 // updateTitle sets the terminal title
 func (e *Editor) updateTitle() {
 	e.pendingTitle = "festivus"
-	if e.filename != "" {
-		e.pendingTitle += " - " + e.filename
+	if e.activeDoc().filename != "" {
+		e.pendingTitle += " - " + e.activeDoc().filename
 	} else {
 		e.pendingTitle += " - [Untitled]"
 	}
@@ -2283,12 +2307,12 @@ func (e *Editor) getTitle() string {
 // updateMenuState updates disabled states for menu items
 func (e *Editor) updateMenuState() {
 	// Revert is disabled if there's no file to revert to
-	e.menubar.SetItemDisabled(ui.ActionRevert, e.filename == "")
+	e.menubar.SetItemDisabled(ui.ActionRevert, e.activeDoc().filename == "")
 }
 
 // openFile prompts for a filename to open
 func (e *Editor) openFile() {
-	if e.modified {
+	if e.activeDoc().modified {
 		e.showPrompt("Unsaved changes. Discard? (y/n): ", PromptConfirmOpen)
 		return
 	}
@@ -2297,11 +2321,11 @@ func (e *Editor) openFile() {
 
 // revertFile reloads the file from disk
 func (e *Editor) revertFile() {
-	if e.filename == "" {
+	if e.activeDoc().filename == "" {
 		e.statusbar.SetMessage("No file to revert", "error")
 		return
 	}
-	if err := e.LoadFile(e.filename); err != nil {
+	if err := e.LoadFile(e.activeDoc().filename); err != nil {
 		e.statusbar.SetMessage("Error: "+err.Error(), "error")
 	} else {
 		e.statusbar.SetMessage("Reverted to saved version", "success")
@@ -2320,7 +2344,7 @@ Nemo enim ipsam voluptatem quia voluptas sit aspernatur aut odit aut fugit, sed 
 Neque porro quisquam est, qui dolorem ipsum quia dolor sit amet, consectetur, adipisci velit, sed quia non numquam eius modi tempora incidunt ut labore et dolore magnam aliquam quaerat voluptatem.
 `
 	e.insertText(lorem)
-	e.viewport.EnsureCursorVisibleWrapped(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
+	e.viewport.EnsureCursorVisibleWrapped(e.activeDoc().buffer.Lines(), e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
 	e.statusbar.SetMessage("Inserted lorem ipsum", "info")
 }
 
@@ -2329,8 +2353,8 @@ func (e *Editor) findNext() {
 		return
 	}
 
-	content := e.buffer.String()
-	startPos := e.cursor.ByteOffset() + 1
+	content := e.activeDoc().buffer.String()
+	startPos := e.activeDoc().cursor.ByteOffset() + 1
 	if startPos >= len(content) {
 		startPos = 0
 	}
@@ -2339,22 +2363,22 @@ func (e *Editor) findNext() {
 	idx := strings.Index(content[startPos:], e.findQuery)
 	if idx >= 0 {
 		pos := startPos + idx
-		e.cursor.SetByteOffset(pos)
-		e.selection.Active = true
-		e.selection.Anchor = pos
-		e.selection.Cursor = pos + len(e.findQuery)
-		e.viewport.EnsureCursorVisibleWrapped(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
+		e.activeDoc().cursor.SetByteOffset(pos)
+		e.activeDoc().selection.Active = true
+		e.activeDoc().selection.Anchor = pos
+		e.activeDoc().selection.Cursor = pos + len(e.findQuery)
+		e.viewport.EnsureCursorVisibleWrapped(e.activeDoc().buffer.Lines(), e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
 		return
 	}
 
 	// Wrap around
 	idx = strings.Index(content[:startPos], e.findQuery)
 	if idx >= 0 {
-		e.cursor.SetByteOffset(idx)
-		e.selection.Active = true
-		e.selection.Anchor = idx
-		e.selection.Cursor = idx + len(e.findQuery)
-		e.viewport.EnsureCursorVisibleWrapped(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
+		e.activeDoc().cursor.SetByteOffset(idx)
+		e.activeDoc().selection.Active = true
+		e.activeDoc().selection.Anchor = idx
+		e.activeDoc().selection.Cursor = idx + len(e.findQuery)
+		e.viewport.EnsureCursorVisibleWrapped(e.activeDoc().buffer.Lines(), e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
 		return
 	}
 
@@ -2437,8 +2461,8 @@ func (e *Editor) replaceNext() {
 		return
 	}
 
-	content := e.buffer.String()
-	startPos := e.cursor.ByteOffset()
+	content := e.activeDoc().buffer.String()
+	startPos := e.activeDoc().cursor.ByteOffset()
 
 	// Search from cursor position
 	idx := strings.Index(content[startPos:], e.findQuery)
@@ -2458,19 +2482,19 @@ func (e *Editor) replaceNext() {
 		Position:     idx,
 		Deleted:      e.findQuery,
 		Inserted:     e.replaceQuery,
-		CursorBefore: e.cursor.ByteOffset(),
+		CursorBefore: e.activeDoc().cursor.ByteOffset(),
 		CursorAfter:  idx + len(e.replaceQuery),
 	}
 
 	// Perform the replacement
-	e.buffer.Replace(idx, idx+len(e.findQuery), e.replaceQuery)
-	e.cursor.SetByteOffset(idx + len(e.replaceQuery))
-	e.selection.Clear()
-	e.undoStack.Push(entry)
-	e.modified = true
+	e.activeDoc().buffer.Replace(idx, idx+len(e.findQuery), e.replaceQuery)
+	e.activeDoc().cursor.SetByteOffset(idx + len(e.replaceQuery))
+	e.activeDoc().selection.Clear()
+	e.activeDoc().undoStack.Push(entry)
+	e.activeDoc().modified = true
 
 	e.statusbar.SetMessage("Replaced", "info")
-	e.viewport.EnsureCursorVisibleWrapped(e.buffer.Lines(), e.cursor.Line(), e.cursor.Col())
+	e.viewport.EnsureCursorVisibleWrapped(e.activeDoc().buffer.Lines(), e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
 }
 
 // replaceAll replaces all occurrences with a single undo entry
@@ -2480,7 +2504,7 @@ func (e *Editor) replaceAll() {
 		return
 	}
 
-	content := e.buffer.String()
+	content := e.activeDoc().buffer.String()
 	count := strings.Count(content, e.findQuery)
 	if count == 0 {
 		e.statusbar.SetMessage("Not found", "error")
@@ -2489,7 +2513,7 @@ func (e *Editor) replaceAll() {
 
 	// Store original content for undo
 	originalContent := content
-	cursorBefore := e.cursor.ByteOffset()
+	cursorBefore := e.activeDoc().cursor.ByteOffset()
 
 	// Replace all occurrences
 	newContent := strings.ReplaceAll(content, e.findQuery, e.replaceQuery)
@@ -2504,11 +2528,11 @@ func (e *Editor) replaceAll() {
 	}
 
 	// Replace the entire buffer
-	e.buffer = NewBufferFromString(newContent)
-	e.cursor = NewCursor(e.buffer)
-	e.selection.Clear()
-	e.undoStack.Push(entry)
-	e.modified = true
+	e.activeDoc().buffer = NewBufferFromString(newContent)
+	e.activeDoc().cursor = NewCursor(e.activeDoc().buffer)
+	e.activeDoc().selection.Clear()
+	e.activeDoc().undoStack.Push(entry)
+	e.activeDoc().modified = true
 
 	e.statusbar.SetMessage(fmt.Sprintf("Replaced %d occurrences", count), "info")
 }
@@ -2528,10 +2552,10 @@ func (e *Editor) View() string {
 
 	// Build selection map for viewport
 	selectionMap := make(map[int]ui.SelectionRange)
-	if e.selection.Active && !e.selection.IsEmpty() {
-		start, end := e.selection.Normalize()
-		startLine, startCol := e.buffer.PositionToLineCol(start)
-		endLine, endCol := e.buffer.PositionToLineCol(end)
+	if e.activeDoc().selection.Active && !e.activeDoc().selection.IsEmpty() {
+		start, end := e.activeDoc().selection.Normalize()
+		startLine, startCol := e.activeDoc().buffer.PositionToLineCol(start)
+		endLine, endCol := e.activeDoc().buffer.PositionToLineCol(end)
 
 		for line := startLine; line <= endLine; line++ {
 			sr := ui.SelectionRange{Start: 0, End: -1}
@@ -2546,11 +2570,11 @@ func (e *Editor) View() string {
 	}
 
 	// Editor viewport
-	lines := e.buffer.Lines()
+	lines := e.activeDoc().buffer.Lines()
 
 	// Generate syntax highlighting colors for visible lines
 	var lineColors map[int][]syntax.ColorSpan
-	if e.highlighter.Enabled() && e.highlighter.HasLexer() {
+	if e.activeDoc().highlighter.Enabled() && e.activeDoc().highlighter.HasLexer() {
 		lineColors = make(map[int][]syntax.ColorSpan)
 		// Calculate visible line range
 		startLine := e.viewport.ScrollY()
@@ -2559,14 +2583,14 @@ func (e *Editor) View() string {
 			endLine = len(lines)
 		}
 		for i := startLine; i < endLine; i++ {
-			colors := e.highlighter.GetLineColors(lines[i])
+			colors := e.activeDoc().highlighter.GetLineColors(lines[i])
 			if len(colors) > 0 {
 				lineColors[i] = colors
 			}
 		}
 	}
 
-	viewportContent := e.viewport.Render(lines, e.cursor.Line(), e.cursor.Col(), selectionMap, lineColors)
+	viewportContent := e.viewport.Render(lines, e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col(), selectionMap, lineColors)
 
 	// Append scrollbar to viewport lines if enabled
 	if e.scrollbar.IsEnabled() {
@@ -2720,11 +2744,11 @@ func (e *Editor) View() string {
 	}
 
 	// Status bar
-	e.statusbar.SetPosition(e.cursor.Line(), e.cursor.Col())
-	e.statusbar.SetFilename(e.filename)
-	e.statusbar.SetModified(e.modified)
-	e.statusbar.SetTotalLines(e.buffer.LineCount())
-	e.statusbar.SetCounts(e.buffer.WordCount(), e.buffer.RuneCount())
+	e.statusbar.SetPosition(e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
+	e.statusbar.SetFilename(e.activeDoc().filename)
+	e.statusbar.SetModified(e.activeDoc().modified)
+	e.statusbar.SetTotalLines(e.activeDoc().buffer.LineCount())
+	e.statusbar.SetCounts(e.activeDoc().buffer.WordCount(), e.activeDoc().buffer.RuneCount())
 	sb.WriteString(e.statusbar.View())
 
 	return sb.String()
@@ -2737,7 +2761,7 @@ func (e *Editor) SetFilename(filename string) {
 	if err != nil {
 		absPath = filename // Fall back to original if Abs fails
 	}
-	e.filename = absPath
-	e.highlighter.SetFile(absPath) // Update syntax highlighter
+	e.activeDoc().filename = absPath
+	e.activeDoc().highlighter.SetFile(absPath) // Update syntax highlighter
 }
 

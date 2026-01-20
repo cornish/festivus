@@ -431,14 +431,14 @@ func (e *Editor) handleSaveAsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return e, nil
 			}
 			// Save the file - try first, only close dialog on success
-			oldFilename := e.filename
-			e.filename = fullPath
+			oldFilename := e.activeDoc().filename
+			e.activeDoc().filename = fullPath
 			if e.doSaveInDialog() {
 				e.mode = ModeNormal
 				e.updateTitle()
 			} else {
 				// Save failed - restore filename and keep dialog open
-				e.filename = oldFilename
+				e.activeDoc().filename = oldFilename
 			}
 		}
 
@@ -524,9 +524,9 @@ func (e *Editor) showFileBrowser() {
 func (e *Editor) showSaveAs() {
 	// Start in current file's directory, or current working directory
 	startDir := ""
-	if e.filename != "" {
-		startDir = filepath.Dir(e.filename)
-		e.saveAsFilename = filepath.Base(e.filename)
+	if e.activeDoc().filename != "" {
+		startDir = filepath.Dir(e.activeDoc().filename)
+		e.saveAsFilename = filepath.Base(e.activeDoc().filename)
 	} else {
 		var err error
 		startDir, err = os.Getwd()
