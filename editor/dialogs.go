@@ -217,6 +217,22 @@ func (e *Editor) overlayAboutDialog(viewportContent string) string {
 		e.box.Vertical+strings.Repeat(" ", innerWidth)+e.box.Vertical,
 	)
 
+	// Terminal capabilities
+	caps := config.GetCapabilities()
+	utf8Status := "No"
+	if caps.UTF8Support {
+		utf8Status = "Yes"
+	}
+	kittyStatus := "No"
+	if caps.KittyGraphics {
+		kittyStatus = "Yes"
+	}
+	aboutLines = append(aboutLines,
+		e.box.Vertical+centerText("─── Terminal ───")+e.box.Vertical,
+		e.box.Vertical+centerText(fmt.Sprintf("UTF-8: %s   Colors: %s   Kitty: %s", utf8Status, caps.ColorMode.String(), kittyStatus))+e.box.Vertical,
+		e.box.Vertical+strings.Repeat(" ", innerWidth)+e.box.Vertical,
+	)
+
 	// Quote lines
 	for _, quoteLine := range quoteLines {
 		aboutLines = append(aboutLines, e.box.Vertical+quoteLine+e.box.Vertical)
