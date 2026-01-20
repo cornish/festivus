@@ -32,6 +32,7 @@ const (
 	ModeSaveAs
 	ModeTheme
 	ModeRecentFiles
+	ModeKeybindings
 )
 
 // FileEntry represents a file or directory in the file browser
@@ -244,7 +245,17 @@ type Editor struct {
 	recentFilesIndex int // Selected index in recent files dialog
 
 	// Configuration
-	config *config.Config
+	config      *config.Config
+	keybindings *config.KeybindingsConfig
+
+	// Keybindings dialog state
+	kbDialogIndex     int    // Selected action index
+	kbDialogScroll    int    // Scroll offset
+	kbDialogEditing   bool   // true = waiting for key input
+	kbDialogEditField int    // 0 = primary, 1 = alternate
+	kbDialogMessage   string // Message to show in dialog (errors, etc.)
+	kbDialogMsgError  bool   // true = message is an error (show in red)
+	kbDialogConfirm   bool   // true = waiting for y/n confirmation
 }
 
 // activeDoc returns the currently active document
@@ -314,6 +325,149 @@ func (e *Editor) findBufferByFilename(filename string) int {
 	return -1
 }
 
+// matchesBinding checks if a key string matches a configured action
+func (e *Editor) matchesBinding(keyStr string, action string) bool {
+	return e.keybindings.GetBinding(action).Matches(keyStr)
+}
+
+// handleConfigurableBinding checks if the key matches any configurable binding and executes the action
+// Returns (true, cmd) if handled, (false, nil) otherwise
+func (e *Editor) handleConfigurableBinding(keyStr string, msg tea.KeyMsg) (bool, tea.Cmd) {
+	// File operations
+	if e.matchesBinding(keyStr, "new") {
+		e.newFile()
+		return true, nil
+	}
+	if e.matchesBinding(keyStr, "open") {
+		e.openFile()
+		return true, nil
+	}
+	if e.matchesBinding(keyStr, "save") {
+		e.SaveFile()
+		return true, nil
+	}
+	if e.matchesBinding(keyStr, "close") {
+		e.closeFile()
+		return true, nil
+	}
+	if e.matchesBinding(keyStr, "recent_files") {
+		e.showRecentFiles()
+		return true, nil
+	}
+	if e.matchesBinding(keyStr, "quit") {
+		return true, e.quitEditor()
+	}
+
+	// Edit operations
+	if e.matchesBinding(keyStr, "undo") {
+		e.undo()
+		return true, nil
+	}
+	if e.matchesBinding(keyStr, "redo") {
+		e.redo()
+		return true, nil
+	}
+	if e.matchesBinding(keyStr, "cut") {
+		if e.activeDoc().selection.Active && !e.activeDoc().selection.IsEmpty() {
+			e.cut()
+		}
+		return true, nil
+	}
+	if e.matchesBinding(keyStr, "copy") {
+		if e.activeDoc().selection.Active && !e.activeDoc().selection.IsEmpty() {
+			e.copy()
+		}
+		return true, nil
+	}
+	if e.matchesBinding(keyStr, "paste") {
+		e.paste()
+		return true, nil
+	}
+	if e.matchesBinding(keyStr, "cut_line") {
+		e.cutLine()
+		return true, nil
+	}
+	if e.matchesBinding(keyStr, "select_all") {
+		e.selectAll()
+		return true, nil
+	}
+
+	// Search operations
+	if e.matchesBinding(keyStr, "find") {
+		e.mode = ModeFind
+		e.findQuery = ""
+		e.findActive = true
+		e.updateViewportSize()
+		return true, nil
+	}
+	if e.matchesBinding(keyStr, "find_next") {
+		e.findNext()
+		return true, nil
+	}
+	if e.matchesBinding(keyStr, "replace") {
+		e.showFindReplace()
+		return true, nil
+	}
+	if e.matchesBinding(keyStr, "goto_line") {
+		e.showPrompt("Go to line: ", PromptGoToLine)
+		return true, nil
+	}
+
+	// Navigation
+	if e.matchesBinding(keyStr, "word_left") {
+		e.activeDoc().selection.Clear()
+		e.activeDoc().cursor.MoveWordLeft()
+		e.viewport.EnsureCursorVisibleWrapped(e.activeDoc().buffer.Lines(), e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
+		return true, nil
+	}
+	if e.matchesBinding(keyStr, "word_right") {
+		e.activeDoc().selection.Clear()
+		e.activeDoc().cursor.MoveWordRight()
+		e.viewport.EnsureCursorVisibleWrapped(e.activeDoc().buffer.Lines(), e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
+		return true, nil
+	}
+	if e.matchesBinding(keyStr, "doc_start") {
+		e.activeDoc().selection.Clear()
+		e.activeDoc().cursor.MoveToStart()
+		e.viewport.EnsureCursorVisibleWrapped(e.activeDoc().buffer.Lines(), e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
+		return true, nil
+	}
+	if e.matchesBinding(keyStr, "doc_end") {
+		e.activeDoc().selection.Clear()
+		e.activeDoc().cursor.MoveToEnd()
+		e.viewport.EnsureCursorVisibleWrapped(e.activeDoc().buffer.Lines(), e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
+		return true, nil
+	}
+
+	// Buffer operations
+	if e.matchesBinding(keyStr, "next_buffer") {
+		if e.bufferCount() > 1 {
+			e.nextBuffer()
+		}
+		return true, nil
+	}
+	if e.matchesBinding(keyStr, "prev_buffer") {
+		if e.bufferCount() > 1 {
+			e.prevBuffer()
+		}
+		return true, nil
+	}
+
+	// View toggles
+	if e.matchesBinding(keyStr, "toggle_line_numbers") {
+		e.toggleLineNumbers()
+		return true, nil
+	}
+
+	// Help
+	if e.matchesBinding(keyStr, "help") {
+		e.showHelp()
+		return true, nil
+	}
+
+	return false, nil
+}
+
 // fileChangedOnDisk checks if the file has been modified externally since last load/save
 func (e *Editor) fileChangedOnDisk() bool {
 	doc := e.activeDoc()
@@ -376,6 +530,7 @@ func NewWithConfig(cfg *config.Config) *Editor {
 		width:       80,
 		height:      24,
 		config:      cfg,
+		keybindings: config.LoadKeybindings(),
 	}
 
 	// Apply config settings
@@ -467,9 +622,11 @@ func (e *Editor) LoadFile(filename string) error {
 	}
 
 	// Decide whether to reuse current buffer or create new one
-	// Reuse if: current buffer is unnamed AND unmodified AND empty
+	// Only reuse the initial empty buffer (when there's just 1 document)
+	// If user has created additional buffers, respect them
 	currentDoc := e.activeDoc()
-	reuseCurrentBuffer := currentDoc.filename == "" &&
+	reuseCurrentBuffer := len(e.documents) == 1 &&
+		currentDoc.filename == "" &&
 		!currentDoc.modified &&
 		currentDoc.buffer.LineCount() == 1 &&
 		len(currentDoc.buffer.Lines()[0]) == 0
@@ -486,6 +643,15 @@ func (e *Editor) LoadFile(filename string) error {
 		currentDoc.modTime = modTime
 		currentDoc.highlighter.SetFile(filename)
 	} else {
+		// Check buffer limit before creating new document
+		maxBuffers := 20 // default
+		if e.config != nil && e.config.Editor.MaxBuffers > 0 {
+			maxBuffers = e.config.Editor.MaxBuffers
+		}
+		if maxBuffers > 0 && len(e.documents) >= maxBuffers {
+			return fmt.Errorf("buffer limit reached (%d)", maxBuffers)
+		}
+
 		// Create new document
 		buf := NewBufferFromString(string(content))
 		doc := &Document{
@@ -527,7 +693,7 @@ func (e *Editor) SaveFile() bool {
 
 	// Check for external changes
 	if e.fileChangedOnDisk() {
-		e.showPrompt("File changed on disk. Overwrite? (y/n): ", PromptFileChanged)
+		e.showPrompt("File changed on disk. Overwrite? (y/N): ", PromptFileChanged)
 		return false
 	}
 
@@ -707,6 +873,9 @@ func (e *Editor) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if e.mode == ModeRecentFiles {
 			return e.handleRecentFilesMouse(msg)
 		}
+		if e.mode == ModeKeybindings {
+			return e.handleKeybindingsMouse(msg)
+		}
 		return e.handleMouse(msg)
 	}
 
@@ -787,6 +956,11 @@ func (e *Editor) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return e.handleRecentFilesKey(msg)
 	}
 
+	// Handle keybindings mode
+	if e.mode == ModeKeybindings {
+		return e.handleKeybindingsKey(msg)
+	}
+
 	// Handle file browser mode
 	if e.mode == ModeFileBrowser {
 		return e.handleFileBrowserKey(msg)
@@ -800,96 +974,15 @@ func (e *Editor) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Clear status message on any key
 	e.statusbar.ClearMessage()
 
-	// Get key string for special combinations
+	// Get key string for matching against configurable bindings
 	keyStr := msg.String()
 
+	// Check configurable keybindings first
+	if handled, cmd := e.handleConfigurableBinding(keyStr, msg); handled {
+		return e, cmd
+	}
+
 	switch msg.Type {
-	// Ctrl key combinations
-	case tea.KeyCtrlC:
-		if e.activeDoc().selection.Active && !e.activeDoc().selection.IsEmpty() {
-			e.copy()
-		}
-		return e, nil
-
-	case tea.KeyCtrlQ:
-		return e, e.quitEditor()
-
-	case tea.KeyCtrlS:
-		e.SaveFile()
-		return e, nil
-
-	case tea.KeyCtrlZ:
-		e.undo()
-		return e, nil
-
-	case tea.KeyCtrlY:
-		e.redo()
-		return e, nil
-
-	case tea.KeyCtrlX:
-		if e.activeDoc().selection.Active && !e.activeDoc().selection.IsEmpty() {
-			e.cut()
-		}
-		return e, nil
-
-	case tea.KeyCtrlV:
-		e.paste()
-		return e, nil
-
-	case tea.KeyCtrlA:
-		e.selectAll()
-		return e, nil
-
-	case tea.KeyCtrlF:
-		e.mode = ModeFind
-		e.findQuery = ""
-		e.findActive = true
-		e.updateViewportSize()
-		return e, nil
-
-	case tea.KeyCtrlN:
-		e.newFile()
-		return e, nil
-
-	case tea.KeyCtrlO:
-		e.openFile()
-		return e, nil
-
-	case tea.KeyCtrlW:
-		e.closeFile()
-		return e, nil
-
-	case tea.KeyCtrlL:
-		e.toggleLineNumbers()
-		return e, nil
-
-	case tea.KeyCtrlK:
-		e.cutLine()
-		return e, nil
-
-	case tea.KeyCtrlG:
-		e.showPrompt("Go to line: ", PromptGoToLine)
-		return e, nil
-
-	case tea.KeyCtrlR:
-		e.showRecentFiles()
-		return e, nil
-
-	case tea.KeyCtrlH:
-		e.showFindReplace()
-		return e, nil
-
-	case tea.KeyCtrlHome:
-		e.activeDoc().selection.Clear()
-		e.activeDoc().cursor.MoveToStart()
-		e.viewport.EnsureCursorVisibleWrapped(e.activeDoc().buffer.Lines(), e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
-		return e, nil
-
-	case tea.KeyCtrlEnd:
-		e.activeDoc().selection.Clear()
-		e.activeDoc().cursor.MoveToEnd()
-		e.viewport.EnsureCursorVisibleWrapped(e.activeDoc().buffer.Lines(), e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
-		return e, nil
 
 	// Shift+Arrow selection keys
 	case tea.KeyShiftLeft:
@@ -1126,11 +1219,15 @@ func (e *Editor) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return e, nil
 			}
 		}
-		// Regular character input
+		// Regular character input - skip control characters (ASCII 0-31 except tab)
 		for _, r := range msg.Runes {
-			e.insertChar(r)
+			if r >= 32 || r == '\t' {
+				e.insertChar(r)
+			}
 		}
-		e.viewport.EnsureCursorVisibleWrapped(e.activeDoc().buffer.Lines(), e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
+		if len(msg.Runes) > 0 {
+			e.viewport.EnsureCursorVisibleWrapped(e.activeDoc().buffer.Lines(), e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
+		}
 		return e, nil
 	}
 
@@ -1172,97 +1269,8 @@ func (e *Editor) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		e.menubar.OpenMenu(0)
 		e.updateViewportSize()
 		return e, nil
-	case "f1":
-		e.showHelp()
-		return e, nil
 	case "f2":
 		e.insertLoremIpsum()
-		return e, nil
-	case "f3":
-		e.findNext()
-		return e, nil
-
-	// Fallback ctrl key handling (string-based)
-	case "ctrl+s":
-		e.SaveFile()
-		return e, nil
-	case "ctrl+q":
-		return e, e.quitEditor()
-	case "ctrl+z":
-		e.undo()
-		return e, nil
-	case "ctrl+y":
-		e.redo()
-		return e, nil
-	case "ctrl+x":
-		if e.activeDoc().selection.Active && !e.activeDoc().selection.IsEmpty() {
-			e.cut()
-		}
-		return e, nil
-	case "ctrl+c":
-		if e.activeDoc().selection.Active && !e.activeDoc().selection.IsEmpty() {
-			e.copy()
-		}
-		return e, nil
-	case "ctrl+v":
-		e.paste()
-		return e, nil
-	case "ctrl+a":
-		e.selectAll()
-		return e, nil
-	case "ctrl+f":
-		e.mode = ModeFind
-		e.findQuery = ""
-		e.findActive = true
-		e.updateViewportSize()
-		return e, nil
-	case "ctrl+n":
-		e.newFile()
-		return e, nil
-	case "ctrl+o":
-		e.openFile()
-		return e, nil
-	case "ctrl+w":
-		e.closeFile()
-		return e, nil
-	case "ctrl+l":
-		e.toggleLineNumbers()
-		return e, nil
-	case "ctrl+k":
-		e.cutLine()
-		return e, nil
-	case "ctrl+g":
-		e.showPrompt("Go to line: ", PromptGoToLine)
-		return e, nil
-	case "ctrl+r":
-		e.showRecentFiles()
-		return e, nil
-	case "ctrl+h":
-		e.showFindReplace()
-		return e, nil
-
-	// Buffer switching (for terminals that pass through Ctrl+Tab)
-	case "ctrl+tab":
-		if e.bufferCount() > 1 {
-			e.nextBuffer()
-		}
-		return e, nil
-	case "ctrl+shift+tab":
-		if e.bufferCount() > 1 {
-			e.prevBuffer()
-		}
-		return e, nil
-
-	// Word movement
-	case "ctrl+left":
-		e.activeDoc().selection.Clear()
-		e.activeDoc().cursor.MoveWordLeft()
-		e.viewport.EnsureCursorVisibleWrapped(e.activeDoc().buffer.Lines(), e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
-		return e, nil
-	case "ctrl+right":
-		e.activeDoc().selection.Clear()
-		e.activeDoc().cursor.MoveWordRight()
-		e.viewport.EnsureCursorVisibleWrapped(e.activeDoc().buffer.Lines(), e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
 		return e, nil
 
 	// Shift+arrow selection (string-based fallback)
@@ -1431,7 +1439,7 @@ func (e *Editor) executePrompt() {
 			if _, err := os.Stat(input); err == nil {
 				// File exists - ask for confirmation
 				e.pendingFilename = input
-				e.promptText = "File exists. Overwrite? (y/n): "
+				e.promptText = "File exists. Overwrite? (y/N): "
 				e.promptInput = ""
 				e.promptAction = PromptConfirmOverwrite
 				e.mode = ModePrompt // Stay in prompt mode
@@ -1736,6 +1744,8 @@ func (e *Editor) executeAction(action ui.MenuAction) (tea.Model, tea.Cmd) {
 		e.toggleScrollbar()
 	case ui.ActionTheme:
 		e.showThemeDialog()
+	case ui.ActionKeybindings:
+		e.showKeybindingsDialog()
 	case ui.ActionBuffer1:
 		e.switchToBuffer(0)
 	case ui.ActionBuffer2:
@@ -1754,6 +1764,28 @@ func (e *Editor) executeAction(action ui.MenuAction) (tea.Model, tea.Cmd) {
 		e.switchToBuffer(7)
 	case ui.ActionBuffer9:
 		e.switchToBuffer(8)
+	case ui.ActionBuffer10:
+		e.switchToBuffer(9)
+	case ui.ActionBuffer11:
+		e.switchToBuffer(10)
+	case ui.ActionBuffer12:
+		e.switchToBuffer(11)
+	case ui.ActionBuffer13:
+		e.switchToBuffer(12)
+	case ui.ActionBuffer14:
+		e.switchToBuffer(13)
+	case ui.ActionBuffer15:
+		e.switchToBuffer(14)
+	case ui.ActionBuffer16:
+		e.switchToBuffer(15)
+	case ui.ActionBuffer17:
+		e.switchToBuffer(16)
+	case ui.ActionBuffer18:
+		e.switchToBuffer(17)
+	case ui.ActionBuffer19:
+		e.switchToBuffer(18)
+	case ui.ActionBuffer20:
+		e.switchToBuffer(19)
 	case ui.ActionHelp:
 		e.showHelp()
 	case ui.ActionAbout:
@@ -2174,6 +2206,428 @@ func (e *Editor) handleRecentFilesMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	return e, nil
 }
 
+// showKeybindingsDialog opens the keybindings configuration dialog
+func (e *Editor) showKeybindingsDialog() {
+	e.kbDialogIndex = 0
+	e.kbDialogScroll = 0
+	e.kbDialogEditing = false
+	e.kbDialogEditField = 0
+	e.kbDialogMessage = ""
+	e.kbDialogMsgError = false
+	e.kbDialogConfirm = false
+	e.mode = ModeKeybindings
+}
+
+// handleKeybindingsKey handles key events in the keybindings dialog
+func (e *Editor) handleKeybindingsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	actions := config.AllActions()
+	actionCount := len(actions)
+
+	// If we're in confirmation mode, handle y/n
+	if e.kbDialogConfirm {
+		if msg.Type == tea.KeyRunes && len(msg.Runes) == 1 {
+			switch msg.Runes[0] {
+			case 'y', 'Y':
+				// Confirmed - reset to defaults
+				e.keybindings = config.DefaultKeybindings()
+				go e.keybindings.Save()
+				e.kbDialogMessage = "Reset to defaults"
+				e.kbDialogMsgError = false
+			case 'n', 'N':
+				e.kbDialogMessage = ""
+			}
+		} else if msg.Type == tea.KeyEsc {
+			e.kbDialogMessage = ""
+		}
+		e.kbDialogConfirm = false
+		return e, nil
+	}
+
+	// If we're in editing mode (waiting for a key), capture the key
+	if e.kbDialogEditing {
+		// Escape cancels editing mode
+		if msg.Type == tea.KeyEsc {
+			e.kbDialogEditing = false
+			return e, nil
+		}
+
+		// Delete/Backspace clears the binding
+		if msg.Type == tea.KeyDelete || msg.Type == tea.KeyBackspace {
+			action := actions[e.kbDialogIndex]
+			binding := e.keybindings.GetBinding(action)
+			if e.kbDialogEditField == 0 {
+				binding.Primary = ""
+			} else {
+				binding.Alternate = ""
+			}
+			e.keybindings.SetBinding(action, binding)
+			e.kbDialogEditing = false
+			go e.keybindings.Save()
+			return e, nil
+		}
+
+		// Convert key press to a key string
+		keyStr := e.keyMsgToString(msg)
+		if keyStr != "" {
+			action := actions[e.kbDialogIndex]
+			binding := e.keybindings.GetBinding(action)
+
+			// Check for conflicts
+			conflicts := e.checkKeyConflict(keyStr, action)
+			if len(conflicts) > 0 {
+				conflictNames := make([]string, len(conflicts))
+				for i, c := range conflicts {
+					conflictNames[i] = config.ActionNames[c]
+				}
+				e.kbDialogMessage = "Conflict: " + strings.Join(conflictNames, ", ")
+				e.kbDialogMsgError = true
+				e.kbDialogEditing = false
+				return e, nil
+			}
+
+			if e.kbDialogEditField == 0 {
+				binding.Primary = keyStr
+			} else {
+				binding.Alternate = keyStr
+			}
+			e.keybindings.SetBinding(action, binding)
+			e.kbDialogEditing = false
+			e.kbDialogMessage = ""
+			e.kbDialogMsgError = false
+			go e.keybindings.Save()
+		}
+		return e, nil
+	}
+
+	// Normal navigation mode
+	switch msg.Type {
+	case tea.KeyUp:
+		if e.kbDialogIndex > 0 {
+			e.kbDialogIndex--
+			e.ensureKbDialogVisible()
+		}
+	case tea.KeyDown:
+		if e.kbDialogIndex < actionCount-1 {
+			e.kbDialogIndex++
+			e.ensureKbDialogVisible()
+		}
+	case tea.KeyLeft:
+		// Switch to primary binding field
+		e.kbDialogEditField = 0
+	case tea.KeyRight:
+		// Switch to alternate binding field
+		e.kbDialogEditField = 1
+	case tea.KeyEnter:
+		// Start editing the selected binding field
+		e.kbDialogEditing = true
+		e.kbDialogMessage = ""
+		e.kbDialogMsgError = false
+	case tea.KeyEsc:
+		e.mode = ModeNormal
+		e.kbDialogMessage = ""
+	case tea.KeyRunes:
+		switch string(msg.Runes) {
+		case "r", "R":
+			// Ask for confirmation before resetting
+			e.kbDialogMessage = "Reset all keybindings to defaults? (y/N)"
+			e.kbDialogMsgError = false
+			e.kbDialogConfirm = true
+		}
+	}
+	return e, nil
+}
+
+// ensureKbDialogVisible adjusts scroll to keep selected item visible
+func (e *Editor) ensureKbDialogVisible() {
+	visibleItems := e.viewport.Height() - 8 // Account for dialog chrome
+	if visibleItems < 5 {
+		visibleItems = 5
+	}
+
+	if e.kbDialogIndex < e.kbDialogScroll {
+		e.kbDialogScroll = e.kbDialogIndex
+	} else if e.kbDialogIndex >= e.kbDialogScroll+visibleItems {
+		e.kbDialogScroll = e.kbDialogIndex - visibleItems + 1
+	}
+}
+
+// handleKeybindingsMouse handles mouse input in the keybindings dialog
+func (e *Editor) handleKeybindingsMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	// If editing, any click cancels
+	if e.kbDialogEditing {
+		if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress {
+			e.kbDialogEditing = false
+		}
+		return e, nil
+	}
+
+	actions := config.AllActions()
+	actionCount := len(actions)
+
+	// Calculate dialog dimensions (must match overlayKeybindingsDialog)
+	boxWidth := 64
+	visibleItems := e.viewport.Height() - 8
+	if visibleItems > actionCount {
+		visibleItems = actionCount
+	}
+	if visibleItems < 5 {
+		visibleItems = 5
+	}
+	boxHeight := visibleItems + 6 // title, header, items, empty, footer, bottom
+
+	startX := (e.width - boxWidth) / 2
+	startY := (e.viewport.Height() - boxHeight) / 2
+
+	// Adjust mouse Y for menu bar
+	mouseY := msg.Y - 1
+
+	// Calculate relative position within dialog
+	relX := msg.X - startX
+	relY := mouseY - startY
+
+	// Check if click is outside dialog - close it
+	if relX < 0 || relX >= boxWidth || relY < 0 || relY >= boxHeight {
+		if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress {
+			e.mode = ModeNormal
+		}
+		return e, nil
+	}
+
+	// Item list starts at line 2 (after title border and header)
+	listStart := 2
+	listEnd := listStart + visibleItems
+
+	switch msg.Button {
+	case tea.MouseButtonLeft:
+		if msg.Action == tea.MouseActionPress {
+			if relY >= listStart && relY < listEnd {
+				clickedIdx := e.kbDialogScroll + relY - listStart
+				if clickedIdx >= 0 && clickedIdx < actionCount {
+					// Determine which field was clicked based on X position
+					// Layout: "│ Action Name (20)  │ Primary (18) │ Alternate (18) │"
+					primaryStart := 23
+					alternateStart := 43
+
+					if e.kbDialogIndex == clickedIdx {
+						// Same item clicked - check field and start editing
+						if relX >= alternateStart {
+							e.kbDialogEditField = 1
+						} else if relX >= primaryStart {
+							e.kbDialogEditField = 0
+						}
+						e.kbDialogEditing = true
+						e.statusbar.SetMessage("Press key for binding (Esc=cancel, Del=clear)", "info")
+					} else {
+						// Different item - just select it
+						e.kbDialogIndex = clickedIdx
+						if relX >= alternateStart {
+							e.kbDialogEditField = 1
+						} else if relX >= primaryStart {
+							e.kbDialogEditField = 0
+						}
+					}
+				}
+			}
+		}
+
+	case tea.MouseButtonWheelUp:
+		if e.kbDialogIndex > 0 {
+			e.kbDialogIndex--
+			e.ensureKbDialogVisible()
+		}
+
+	case tea.MouseButtonWheelDown:
+		if e.kbDialogIndex < actionCount-1 {
+			e.kbDialogIndex++
+			e.ensureKbDialogVisible()
+		}
+	}
+
+	return e, nil
+}
+
+// keyMsgToString converts a tea.KeyMsg to a keybinding string like "ctrl+s"
+func (e *Editor) keyMsgToString(msg tea.KeyMsg) string {
+	var parts []string
+
+	// Add modifiers
+	if msg.Alt {
+		parts = append(parts, "alt")
+	}
+
+	// Check for ctrl from the key type
+	switch msg.Type {
+	case tea.KeyCtrlA:
+		parts = append(parts, "ctrl")
+		parts = append(parts, "a")
+	case tea.KeyCtrlB:
+		parts = append(parts, "ctrl")
+		parts = append(parts, "b")
+	case tea.KeyCtrlC:
+		parts = append(parts, "ctrl")
+		parts = append(parts, "c")
+	case tea.KeyCtrlD:
+		parts = append(parts, "ctrl")
+		parts = append(parts, "d")
+	case tea.KeyCtrlE:
+		parts = append(parts, "ctrl")
+		parts = append(parts, "e")
+	case tea.KeyCtrlF:
+		parts = append(parts, "ctrl")
+		parts = append(parts, "f")
+	case tea.KeyCtrlG:
+		parts = append(parts, "ctrl")
+		parts = append(parts, "g")
+	case tea.KeyCtrlH:
+		parts = append(parts, "ctrl")
+		parts = append(parts, "h")
+	// Note: tea.KeyCtrlI is same as tea.KeyTab (handled below)
+	case tea.KeyCtrlJ:
+		parts = append(parts, "ctrl")
+		parts = append(parts, "j")
+	case tea.KeyCtrlK:
+		parts = append(parts, "ctrl")
+		parts = append(parts, "k")
+	case tea.KeyCtrlL:
+		parts = append(parts, "ctrl")
+		parts = append(parts, "l")
+	case tea.KeyCtrlM:
+		parts = append(parts, "ctrl")
+		parts = append(parts, "m")
+	case tea.KeyCtrlN:
+		parts = append(parts, "ctrl")
+		parts = append(parts, "n")
+	case tea.KeyCtrlO:
+		parts = append(parts, "ctrl")
+		parts = append(parts, "o")
+	case tea.KeyCtrlP:
+		parts = append(parts, "ctrl")
+		parts = append(parts, "p")
+	case tea.KeyCtrlQ:
+		parts = append(parts, "ctrl")
+		parts = append(parts, "q")
+	case tea.KeyCtrlR:
+		parts = append(parts, "ctrl")
+		parts = append(parts, "r")
+	case tea.KeyCtrlS:
+		parts = append(parts, "ctrl")
+		parts = append(parts, "s")
+	case tea.KeyCtrlT:
+		parts = append(parts, "ctrl")
+		parts = append(parts, "t")
+	case tea.KeyCtrlU:
+		parts = append(parts, "ctrl")
+		parts = append(parts, "u")
+	case tea.KeyCtrlV:
+		parts = append(parts, "ctrl")
+		parts = append(parts, "v")
+	case tea.KeyCtrlW:
+		parts = append(parts, "ctrl")
+		parts = append(parts, "w")
+	case tea.KeyCtrlX:
+		parts = append(parts, "ctrl")
+		parts = append(parts, "x")
+	case tea.KeyCtrlY:
+		parts = append(parts, "ctrl")
+		parts = append(parts, "y")
+	case tea.KeyCtrlZ:
+		parts = append(parts, "ctrl")
+		parts = append(parts, "z")
+	case tea.KeyF1:
+		parts = append(parts, "f1")
+	case tea.KeyF2:
+		parts = append(parts, "f2")
+	case tea.KeyF3:
+		parts = append(parts, "f3")
+	case tea.KeyF4:
+		parts = append(parts, "f4")
+	case tea.KeyF5:
+		parts = append(parts, "f5")
+	case tea.KeyF6:
+		parts = append(parts, "f6")
+	case tea.KeyF7:
+		parts = append(parts, "f7")
+	case tea.KeyF8:
+		parts = append(parts, "f8")
+	case tea.KeyF9:
+		parts = append(parts, "f9")
+	case tea.KeyF10:
+		parts = append(parts, "f10")
+	case tea.KeyF11:
+		parts = append(parts, "f11")
+	case tea.KeyF12:
+		parts = append(parts, "f12")
+	case tea.KeyHome:
+		parts = append(parts, "home")
+	case tea.KeyEnd:
+		parts = append(parts, "end")
+	case tea.KeyLeft:
+		parts = append(parts, "left")
+	case tea.KeyRight:
+		parts = append(parts, "right")
+	case tea.KeyUp:
+		parts = append(parts, "up")
+	case tea.KeyDown:
+		parts = append(parts, "down")
+	case tea.KeyTab:
+		parts = append(parts, "tab")
+	case tea.KeyShiftTab:
+		parts = append(parts, "shift")
+		parts = append(parts, "tab")
+	case tea.KeyRunes:
+		if len(msg.Runes) == 1 {
+			r := msg.Runes[0]
+			parts = append(parts, strings.ToLower(string(r)))
+		}
+	default:
+		return "" // Unsupported key
+	}
+
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, "+")
+}
+
+// reservedKeys are keys that cannot be remapped (menu shortcuts, etc.)
+var reservedKeys = map[string]string{
+	"alt+f":  "File menu",
+	"alt+b":  "Buffers menu",
+	"alt+e":  "Edit menu",
+	"alt+s":  "Search menu",
+	"alt+o":  "Options menu",
+	"alt+h":  "Help menu",
+	"alt+<":  "Previous buffer",
+	"alt+>":  "Next buffer",
+	"f10":    "Open menu",
+	"escape": "Cancel/Close",
+	"esc":    "Cancel/Close",
+}
+
+// checkKeyConflict checks if a key is already bound to another action or reserved
+func (e *Editor) checkKeyConflict(keyStr, currentAction string) []string {
+	var conflicts []string
+	keyLower := strings.ToLower(keyStr)
+
+	// Check reserved keys first
+	if desc, reserved := reservedKeys[keyLower]; reserved {
+		conflicts = append(conflicts, desc)
+		return conflicts
+	}
+
+	for _, action := range config.AllActions() {
+		if action == currentAction {
+			continue
+		}
+		binding := e.keybindings.GetBinding(action)
+		if strings.ToLower(binding.Primary) == keyLower ||
+			strings.ToLower(binding.Alternate) == keyLower {
+			conflicts = append(conflicts, action)
+		}
+	}
+	return conflicts
+}
+
 // showHelp opens the Help dialog with keyboard shortcuts
 func (e *Editor) showHelp() {
 	e.mode = ModeHelp
@@ -2441,21 +2895,18 @@ func (e *Editor) selectAll() {
 }
 
 func (e *Editor) newFile() {
-	// Check for unsaved changes
-	if e.activeDoc().modified {
-		e.showPrompt("Unsaved changes. Discard? (y/n): ", PromptConfirmNew)
-		return
-	}
+	// Creates a new buffer - doesn't affect the current buffer
 	e.doNewFile()
 }
 
 func (e *Editor) doNewFile() {
-	// If current buffer is empty and untitled, just reuse it
-	currentDoc := e.activeDoc()
-	if currentDoc.filename == "" && !currentDoc.modified &&
-		currentDoc.buffer.LineCount() == 1 && len(currentDoc.buffer.Lines()[0]) == 0 {
-		// Already have an empty untitled buffer, nothing to do
-		e.statusbar.SetMessage("New file", "info")
+	// Check buffer limit
+	maxBuffers := 20 // default
+	if e.config != nil && e.config.Editor.MaxBuffers > 0 {
+		maxBuffers = e.config.Editor.MaxBuffers
+	}
+	if maxBuffers > 0 && len(e.documents) >= maxBuffers {
+		e.statusbar.SetMessage(fmt.Sprintf("Buffer limit reached (%d)", maxBuffers), "error")
 		return
 	}
 
@@ -2482,7 +2933,7 @@ func (e *Editor) doNewFile() {
 // closeFile closes the current file (same as new, but different messaging)
 func (e *Editor) closeFile() {
 	if e.activeDoc().modified {
-		e.showPrompt("Unsaved changes. Discard? (y/n): ", PromptConfirmClose)
+		e.showPrompt("Unsaved changes. Discard? (y/N): ", PromptConfirmClose)
 		return
 	}
 	e.doCloseFile()
@@ -2525,9 +2976,9 @@ func (e *Editor) quitEditor() tea.Cmd {
 		}
 	}
 	if unsavedCount > 0 {
-		msg := "Unsaved changes. Quit anyway? (y/n): "
+		msg := "Unsaved changes. Quit anyway? (y/N): "
 		if unsavedCount > 1 {
-			msg = fmt.Sprintf("%d unsaved buffers. Quit anyway? (y/n): ", unsavedCount)
+			msg = fmt.Sprintf("%d unsaved buffers. Quit anyway? (y/N): ", unsavedCount)
 		}
 		e.showPrompt(msg, PromptConfirmQuit)
 		return nil
@@ -2573,7 +3024,7 @@ func (e *Editor) updateMenuState() {
 // openFile prompts for a filename to open
 func (e *Editor) openFile() {
 	if e.activeDoc().modified {
-		e.showPrompt("Unsaved changes. Discard? (y/n): ", PromptConfirmOpen)
+		e.showPrompt("Unsaved changes. Discard? (y/N): ", PromptConfirmOpen)
 		return
 	}
 	e.showFileBrowser()
@@ -2919,6 +3370,11 @@ func (e *Editor) View() string {
 	// If recent files dialog is open, overlay it centered on the viewport
 	if e.mode == ModeRecentFiles {
 		viewportContent = e.overlayRecentFilesDialog(viewportContent)
+	}
+
+	// If keybindings dialog is open, overlay it centered on the viewport
+	if e.mode == ModeKeybindings {
+		viewportContent = e.overlayKeybindingsDialog(viewportContent)
 	}
 
 	sb.WriteString(viewportContent)

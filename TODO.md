@@ -9,7 +9,7 @@
 
 - [ ] Rectangular/column selection (block mode)
 - [ ] Split views (simple horizontal/vertical)
-- [ ] Configurable keybindings
+- [x] Configurable keybindings
 - [ ] Braille minimap (2x4 pixels per cell for code density)
   - 4 chars wide works best
   - Truncate source lines at ~40 chars before converting

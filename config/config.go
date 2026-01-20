@@ -51,6 +51,7 @@ type EditorConfig struct {
 	AsciiMode       *bool `toml:"ascii_mode"`     // nil = auto-detect, true/false = override
 	BackupCount     int   `toml:"backup_count"`   // 0=disabled, 1=filename~, >1=filename~1~ through filename~N~
 	Scrollbar       bool  `toml:"scrollbar"`      // Show scrollbar
+	MaxBuffers      int   `toml:"max_buffers"`    // Maximum open buffers (0=unlimited, default 20)
 }
 
 // ThemeConfig holds the theme reference in the main config
@@ -66,6 +67,7 @@ func DefaultConfig() *Config {
 			WordWrap:        false,
 			LineNumbers:     false,
 			SyntaxHighlight: true, // Enabled by default
+			MaxBuffers:      20,   // Default max open buffers
 		},
 		Theme: ThemeConfig{
 			Name: "default",

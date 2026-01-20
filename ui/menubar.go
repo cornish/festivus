@@ -38,8 +38,9 @@ const (
 	ActionWordWrap
 	ActionLineNumbers
 	ActionSyntaxHighlight
-	ActionScrollbar // Toggle scrollbar
-	ActionTheme     // Opens theme selection dialog
+	ActionScrollbar   // Toggle scrollbar
+	ActionTheme       // Opens theme selection dialog
+	ActionKeybindings // Opens keybindings dialog
 	// Buffers menu
 	ActionBuffer1
 	ActionBuffer2
@@ -50,6 +51,17 @@ const (
 	ActionBuffer7
 	ActionBuffer8
 	ActionBuffer9
+	ActionBuffer10
+	ActionBuffer11
+	ActionBuffer12
+	ActionBuffer13
+	ActionBuffer14
+	ActionBuffer15
+	ActionBuffer16
+	ActionBuffer17
+	ActionBuffer18
+	ActionBuffer19
+	ActionBuffer20
 	// Help menu
 	ActionHelp
 	ActionAbout
@@ -132,6 +144,7 @@ func NewMenuBar(styles Styles) *MenuBar {
 					{Label: "[x] Syntax Highlight", Shortcut: "", HotKey: 'S', Action: ActionSyntaxHighlight},
 					{Label: "[ ] Scrollbar", Shortcut: "", HotKey: 'B', Action: ActionScrollbar},
 					{Label: "Theme...", Shortcut: "", HotKey: 'T', Action: ActionTheme},
+					{Label: "Keybindings...", Shortcut: "", HotKey: 'K', Action: ActionKeybindings},
 				},
 			},
 			{
@@ -324,14 +337,19 @@ func (m *MenuBar) SetBuffers(names []string, activeIdx int) {
 
 	// Build new items list
 	var items []MenuItem
-	actions := []MenuAction{ActionBuffer1, ActionBuffer2, ActionBuffer3, ActionBuffer4, ActionBuffer5, ActionBuffer6, ActionBuffer7, ActionBuffer8, ActionBuffer9}
-	hotkeys := []rune{'1', '2', '3', '4', '5', '6', '7', '8', '9'}
+	actions := []MenuAction{
+		ActionBuffer1, ActionBuffer2, ActionBuffer3, ActionBuffer4, ActionBuffer5,
+		ActionBuffer6, ActionBuffer7, ActionBuffer8, ActionBuffer9, ActionBuffer10,
+		ActionBuffer11, ActionBuffer12, ActionBuffer13, ActionBuffer14, ActionBuffer15,
+		ActionBuffer16, ActionBuffer17, ActionBuffer18, ActionBuffer19, ActionBuffer20,
+	}
+	hotkeys := []rune{'1', '2', '3', '4', '5', '6', '7', '8', '9', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 
 	for i, name := range names {
-		if i >= 9 {
-			break // Max 9 buffers in menu
+		if i >= 20 {
+			break // Max 20 buffers in menu
 		}
-		// Format: "1• filename" or "2  filename"
+		// Format: "1• filename" or "2  filename" (or "10• filename" etc)
 		var label string
 		if i == activeIdx {
 			label = fmt.Sprintf("%d• %s", i+1, name)

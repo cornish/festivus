@@ -1,6 +1,7 @@
 package editor
 
 import (
+	"festivus/config"
 	"festivus/ui"
 	"strings"
 
@@ -266,40 +267,53 @@ func (e *Editor) overlayHelpDialog(viewportContent string) string {
 		return strings.Repeat(" ", padLeft) + s + strings.Repeat(" ", padRight)
 	}
 
-	// Define shortcuts in two columns
+	// Helper to format a keybinding entry
+	fmtKey := func(action, label string) string {
+		binding := e.keybindings.GetBinding(action)
+		key := config.FormatKeyForDisplay(binding.Primary)
+		if key == "" {
+			key = "(none)"
+		}
+		// Pad key to 14 chars, label follows
+		keyPadded := padText("  "+key, 15)
+		return keyPadded + label
+	}
+
+	// Define shortcuts in two columns using current keybindings
 	leftCol := []string{
 		"  FILE",
-		"  Ctrl+N       New file",
-		"  Ctrl+O       Open file",
-		"  Ctrl+R       Recent files",
-		"  Ctrl+W       Close file",
-		"  Ctrl+S       Save file",
-		"  Ctrl+Q       Quit",
+		fmtKey("new", "New file"),
+		fmtKey("open", "Open file"),
+		fmtKey("recent_files", "Recent files"),
+		fmtKey("close", "Close file"),
+		fmtKey("save", "Save file"),
+		fmtKey("quit", "Quit"),
 		"",
 		"  EDIT",
-		"  Ctrl+Z       Undo",
-		"  Ctrl+Y       Redo",
-		"  Ctrl+X       Cut",
-		"  Ctrl+C       Copy",
-		"  Ctrl+V       Paste",
-		"  Ctrl+K       Cut line",
-		"  Ctrl+A       Select all",
+		fmtKey("undo", "Undo"),
+		fmtKey("redo", "Redo"),
+		fmtKey("cut", "Cut"),
+		fmtKey("copy", "Copy"),
+		fmtKey("paste", "Paste"),
+		fmtKey("cut_line", "Cut line"),
+		fmtKey("select_all", "Select all"),
 		"",
 		"  SEARCH",
-		"  Ctrl+F       Find",
-		"  F3           Find next",
-		"  Ctrl+H       Replace",
+		fmtKey("find", "Find"),
+		fmtKey("find_next", "Find next"),
+		fmtKey("replace", "Replace"),
 	}
 
 	rightCol := []string{
 		"  NAVIGATION",
 		"  Arrows       Move cursor",
-		"  Ctrl+Left/Right  Move by word",
+		fmtKey("word_left", "Move word left"),
+		fmtKey("word_right", "Move word right"),
 		"  Home/End     Start/end of line",
-		"  Ctrl+Home    Start of file",
-		"  Ctrl+End     End of file",
+		fmtKey("doc_start", "Start of file"),
+		fmtKey("doc_end", "End of file"),
 		"  PgUp/PgDn    Page up/down",
-		"  Ctrl+G       Go to line",
+		fmtKey("goto_line", "Go to line"),
 		"",
 		"  SELECTION",
 		"  Shift+Arrows    Select text",
@@ -344,7 +358,11 @@ func (e *Editor) overlayHelpDialog(viewportContent string) string {
 	helpLines = append(helpLines, e.box.Vertical+strings.Repeat(" ", innerWidth)+e.box.Vertical)
 
 	// Options section
-	helpLines = append(helpLines, e.box.Vertical+centerText("OPTIONS: Ctrl+L Line Numbers", innerWidth)+e.box.Vertical)
+	toggleLnKey := config.FormatKeyForDisplay(e.keybindings.GetBinding("toggle_line_numbers").Primary)
+	if toggleLnKey == "" {
+		toggleLnKey = "(none)"
+	}
+	helpLines = append(helpLines, e.box.Vertical+centerText("OPTIONS: "+toggleLnKey+" Line Numbers", innerWidth)+e.box.Vertical)
 	helpLines = append(helpLines, e.box.Vertical+centerText("MENUS: F10 or Alt+F/E/O/H", innerWidth)+e.box.Vertical)
 
 	// Empty line
@@ -540,4 +558,188 @@ func formatRecentPath(path string, maxWidth int) string {
 		runes = runes[1:]
 	}
 	return "..." + string(runes)
+}
+
+// overlayKeybindingsDialog overlays the keybindings configuration dialog
+func (e *Editor) overlayKeybindingsDialog(viewportContent string) string {
+	boxWidth := 64
+	innerWidth := boxWidth - 2 // 62
+
+	actions := config.AllActions()
+	actionCount := len(actions)
+
+	// Calculate visible items based on viewport height
+	visibleItems := e.viewport.Height() - 8
+	if visibleItems > actionCount {
+		visibleItems = actionCount
+	}
+	if visibleItems < 5 {
+		visibleItems = 5
+	}
+
+	padText := func(s string, width int) string {
+		sw := runewidth.StringWidth(s)
+		if sw > width {
+			return runewidth.Truncate(s, width, "")
+		}
+		return s + strings.Repeat(" ", width-sw)
+	}
+
+	centerText := func(s string, width int) string {
+		sw := runewidth.StringWidth(s)
+		if sw >= width {
+			return runewidth.Truncate(s, width, "")
+		}
+		padLeft := (width - sw) / 2
+		padRight := width - sw - padLeft
+		return strings.Repeat(" ", padLeft) + s + strings.Repeat(" ", padRight)
+	}
+
+	// Get theme colors
+	themeUI := e.styles.Theme.UI
+	dialogStyle := ui.ColorToANSI(themeUI.DialogFg, themeUI.DialogBg)
+	selectedStyle := ui.ColorToANSI(themeUI.DialogButtonFg, themeUI.DialogButton)
+	dialogResetStyle := ui.ColorToANSI(themeUI.DialogFg, themeUI.DialogBg)
+	resetStyle := "\033[0m"
+
+	// Column widths: space(1) + Action(21) + |(1) + Primary(19) + |(1) + Alternate(19) = 62 = innerWidth
+	actionWidth := 21
+	keyWidth := 19
+
+	var dialogLines []string
+
+	// Top border with title
+	title := " Keybindings "
+	titlePadLeft := (innerWidth - len(title)) / 2
+	titlePadRight := innerWidth - len(title) - titlePadLeft
+	dialogLines = append(dialogLines, e.box.TopLeft+strings.Repeat(e.box.Horizontal, titlePadLeft)+title+strings.Repeat(e.box.Horizontal, titlePadRight)+e.box.TopRight)
+
+	// Header row
+	header := " " + padText("Action", actionWidth) + e.box.Vertical + padText(" Primary", keyWidth) + e.box.Vertical + padText(" Alternate", keyWidth)
+	dialogLines = append(dialogLines, e.box.Vertical+header+e.box.Vertical)
+
+	// Action list with scrolling
+	for i := 0; i < visibleItems; i++ {
+		idx := e.kbDialogScroll + i
+		if idx >= actionCount {
+			// Empty row if we run out of items
+			dialogLines = append(dialogLines, e.box.Vertical+strings.Repeat(" ", innerWidth)+e.box.Vertical)
+			continue
+		}
+
+		action := actions[idx]
+		actionName := config.ActionNames[action]
+		binding := e.keybindings.GetBinding(action)
+
+		primaryStr := config.FormatKeyForDisplay(binding.Primary)
+		if primaryStr == "" {
+			primaryStr = "(none)"
+		}
+		alternateStr := config.FormatKeyForDisplay(binding.Alternate)
+		if alternateStr == "" {
+			alternateStr = "(none)"
+		}
+
+		isSelected := idx == e.kbDialogIndex
+
+		var line string
+		if isSelected {
+			// Build line with highlighting for selected row
+			actionPart := " " + padText(actionName, actionWidth)
+
+			// Format key fields - show brackets around active field, cursor when editing
+			var primaryDisplay, alternateDisplay string
+			if e.kbDialogEditField == 0 {
+				if e.kbDialogEditing {
+					primaryDisplay = "[" + padText("_", keyWidth-2) + "]"
+				} else {
+					primaryDisplay = "[" + padText(primaryStr, keyWidth-2) + "]"
+				}
+				alternateDisplay = " " + padText(alternateStr, keyWidth-1)
+			} else {
+				primaryDisplay = " " + padText(primaryStr, keyWidth-1)
+				if e.kbDialogEditing {
+					alternateDisplay = "[" + padText("_", keyWidth-2) + "]"
+				} else {
+					alternateDisplay = "[" + padText(alternateStr, keyWidth-2) + "]"
+				}
+			}
+
+			line = e.box.Vertical + selectedStyle + actionPart +
+				e.box.Vertical + primaryDisplay +
+				e.box.Vertical + alternateDisplay + dialogResetStyle + e.box.Vertical
+		} else {
+			// Normal unselected row
+			line = e.box.Vertical + " " + padText(actionName, actionWidth) +
+				e.box.Vertical + " " + padText(primaryStr, keyWidth-1) +
+				e.box.Vertical + " " + padText(alternateStr, keyWidth-1) + e.box.Vertical
+		}
+		dialogLines = append(dialogLines, line)
+	}
+
+	// Empty line
+	dialogLines = append(dialogLines, e.box.Vertical+strings.Repeat(" ", innerWidth)+e.box.Vertical)
+
+	// Message line (errors, info)
+	if e.kbDialogMessage != "" {
+		msgText := centerText(e.kbDialogMessage, innerWidth)
+		var msgLine string
+		if e.kbDialogMsgError {
+			// Show errors in red
+			errorStyle := ui.ColorToANSIFg(themeUI.ErrorFg) + "\033[1m" // Bold red
+			msgLine = e.box.Vertical + errorStyle + msgText + dialogResetStyle + e.box.Vertical
+		} else {
+			msgLine = e.box.Vertical + msgText + e.box.Vertical
+		}
+		dialogLines = append(dialogLines, msgLine)
+	}
+
+	// Footer with instructions
+	footer := "[Enter] Edit  [<][>] Field  [R]eset  [Esc] Close"
+	if e.kbDialogEditing {
+		footer = "Press key to bind  [Esc] Cancel  [Del] Clear"
+	} else if e.kbDialogConfirm {
+		footer = "" // No footer during confirmation - message has the prompt
+	}
+	dialogLines = append(dialogLines, e.box.Vertical+centerText(footer, innerWidth)+e.box.Vertical)
+
+	// Scroll indicator if needed
+	scrollInfo := ""
+	if actionCount > visibleItems {
+		scrollInfo = centerText("["+strings.Repeat("^", min(1, e.kbDialogScroll))+strings.Repeat("v", min(1, actionCount-e.kbDialogScroll-visibleItems))+"]", innerWidth)
+		if e.kbDialogScroll > 0 || e.kbDialogScroll+visibleItems < actionCount {
+			dialogLines = append(dialogLines, e.box.Vertical+scrollInfo+e.box.Vertical)
+		}
+	}
+
+	// Bottom border
+	dialogLines = append(dialogLines, e.box.BottomLeft+strings.Repeat(e.box.Horizontal, innerWidth)+e.box.BottomRight)
+
+	boxHeight := len(dialogLines)
+
+	// Calculate centering
+	startX := (e.width - boxWidth) / 2
+	if startX < 0 {
+		startX = 0
+	}
+	startY := (e.viewport.Height() - boxHeight) / 2
+	if startY < 0 {
+		startY = 0
+	}
+
+	viewportLines := strings.Split(viewportContent, "\n")
+
+	for i, dialogLine := range dialogLines {
+		viewportY := startY + i
+		if viewportY >= 0 && viewportY < len(viewportLines) {
+			var styledLine strings.Builder
+			styledLine.WriteString(dialogStyle)
+			styledLine.WriteString(dialogLine)
+			styledLine.WriteString(resetStyle)
+
+			viewportLines[viewportY] = overlayLineAt(styledLine.String(), viewportLines[viewportY], startX)
+		}
+	}
+
+	return strings.Join(viewportLines, "\n")
 }
