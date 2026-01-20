@@ -3,6 +3,7 @@ package editor
 import (
 	"festivus/config"
 	"festivus/ui"
+	"fmt"
 	"strings"
 
 	"github.com/mattn/go-runewidth"
@@ -648,6 +649,86 @@ func (e *Editor) overlayConfigErrorDialog(viewportContent string) string {
 		}
 	}
 	db.AddCenteredText(buttonRow.String())
+
+	db.AddBottomBorder()
+
+	return db.Overlay(viewportContent, e.width, e.viewport.Height())
+}
+
+// overlaySettingsDialog overlays the settings dialog
+func (e *Editor) overlaySettingsDialog(viewportContent string) string {
+	boxWidth := 54
+	db := e.NewDialogBuilder(boxWidth)
+
+	db.AddTitleBorder(" Settings ")
+	db.AddEmptyLine()
+
+	// Settings rows
+	const (
+		rowWordWrap    = 0
+		rowLineNumbers = 1
+		rowSyntax      = 2
+		rowScrollbar   = 3
+		rowBackupCount = 4
+		rowMaxBuffers  = 5
+		rowSave        = 6
+		rowCancel      = 7
+	)
+
+	// Helper to format checkbox - pad first, then apply highlighting
+	checkbox := func(label string, checked bool, row int) string {
+		check := "[ ]"
+		if checked {
+			check = "[x]"
+		}
+		line := "  " + check + " " + label
+		padded := db.PadText(line)
+		if e.settingsIndex == row {
+			return db.themeUI.selectedStyle + padded + db.themeUI.dialogResetStyle
+		}
+		return padded
+	}
+
+	// Helper to format number input - pad first, then apply highlighting
+	numberInput := func(label string, value int, row int) string {
+		valStr := fmt.Sprintf("%2d", value)
+		line := "  " + label + ": [" + valStr + "] [-][+]"
+		padded := db.PadText(line)
+		if e.settingsIndex == row {
+			return db.themeUI.selectedStyle + padded + db.themeUI.dialogResetStyle
+		}
+		return padded
+	}
+
+	// Checkboxes
+	db.lines = append(db.lines, db.box.Vertical+checkbox("Word Wrap", e.settingsWordWrap, rowWordWrap)+db.box.Vertical)
+	db.lines = append(db.lines, db.box.Vertical+checkbox("Line Numbers", e.settingsLineNumbers, rowLineNumbers)+db.box.Vertical)
+	db.lines = append(db.lines, db.box.Vertical+checkbox("Syntax Highlighting", e.settingsSyntax, rowSyntax)+db.box.Vertical)
+	db.lines = append(db.lines, db.box.Vertical+checkbox("Scrollbar", e.settingsScrollbar, rowScrollbar)+db.box.Vertical)
+
+	db.AddEmptyLine()
+
+	// Number inputs
+	db.lines = append(db.lines, db.box.Vertical+numberInput("Backup Count", e.settingsBackupCount, rowBackupCount)+db.box.Vertical)
+	db.lines = append(db.lines, db.box.Vertical+db.PadText("    0=disabled, 1=file~, N=rotating")+db.box.Vertical)
+	db.lines = append(db.lines, db.box.Vertical+numberInput("Max Buffers", e.settingsMaxBuffers, rowMaxBuffers)+db.box.Vertical)
+	db.lines = append(db.lines, db.box.Vertical+db.PadText("    0=unlimited")+db.box.Vertical)
+
+	db.AddEmptyLine()
+
+	// Buttons - center them properly
+	saveBtnText := "[ Save ]"
+	cancelBtnText := "[ Cancel ]"
+	buttonContent := saveBtnText + "    " + cancelBtnText // 8 + 4 + 10 = 22 chars
+	paddedLine := db.CenterText(buttonContent)
+	// Now apply highlighting by replacing the button text
+	if e.settingsIndex == rowSave {
+		paddedLine = strings.Replace(paddedLine, saveBtnText, db.themeUI.selectedStyle+saveBtnText+db.themeUI.dialogResetStyle, 1)
+	}
+	if e.settingsIndex == rowCancel {
+		paddedLine = strings.Replace(paddedLine, cancelBtnText, db.themeUI.selectedStyle+cancelBtnText+db.themeUI.dialogResetStyle, 1)
+	}
+	db.lines = append(db.lines, db.box.Vertical+paddedLine+db.box.Vertical)
 
 	db.AddBottomBorder()
 

@@ -42,6 +42,7 @@ const (
 	ActionScrollbar   // Toggle scrollbar
 	ActionTheme       // Opens theme selection dialog
 	ActionKeybindings // Opens keybindings dialog
+	ActionSettings    // Opens settings dialog
 	// Buffers menu
 	ActionBuffer1
 	ActionBuffer2
@@ -147,6 +148,7 @@ func NewMenuBar(styles Styles) *MenuBar {
 					{Label: "[ ] Scrollbar", Shortcut: "", HotKey: 'B', Action: ActionScrollbar},
 					{Label: "Theme...", Shortcut: "", HotKey: 'T', Action: ActionTheme},
 					{Label: "Keybindings...", Shortcut: "", HotKey: 'K', Action: ActionKeybindings},
+					{Label: "Settings...", Shortcut: "", HotKey: 'G', Action: ActionSettings},
 				},
 			},
 			{

@@ -35,6 +35,7 @@ const (
 	ModeRecentDirs
 	ModeKeybindings
 	ModeConfigError
+	ModeSettings
 )
 
 // FileEntry represents a file or directory in the file browser
@@ -267,9 +268,18 @@ type Editor struct {
 	kbDialogConfirm   bool   // true = waiting for y/n confirmation
 
 	// Config error dialog state
-	configErrorFile    string // Path to malformed config file
-	configErrorMsg     string // Error message from parser
-	configErrorChoice  int    // 0=Edit, 1=Defaults, 2=Quit
+	configErrorFile   string // Path to malformed config file
+	configErrorMsg    string // Error message from parser
+	configErrorChoice int    // 0=Edit, 1=Defaults, 2=Quit
+
+	// Settings dialog state
+	settingsIndex       int  // Selected row (0-5 for settings, 6=Save, 7=Cancel)
+	settingsWordWrap    bool // Temporary value while editing
+	settingsLineNumbers bool
+	settingsSyntax      bool
+	settingsScrollbar   bool
+	settingsBackupCount int
+	settingsMaxBuffers  int
 }
 
 // activeDoc returns the currently active document
@@ -898,6 +908,9 @@ func (e *Editor) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if e.mode == ModeConfigError {
 			return e.handleConfigErrorMouse(msg)
 		}
+		if e.mode == ModeSettings {
+			return e.handleSettingsMouse(msg)
+		}
 		if e.mode == ModeHelp {
 			return e.handleHelpMouse(msg)
 		}
@@ -977,6 +990,11 @@ func (e *Editor) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Handle config error mode
 	if e.mode == ModeConfigError {
 		return e.handleConfigErrorKey(msg)
+	}
+
+	// Handle settings mode
+	if e.mode == ModeSettings {
+		return e.handleSettingsKey(msg)
 	}
 
 	// Handle theme selection mode
@@ -1791,6 +1809,8 @@ func (e *Editor) executeAction(action ui.MenuAction) (tea.Model, tea.Cmd) {
 		e.showThemeDialog()
 	case ui.ActionKeybindings:
 		e.showKeybindingsDialog()
+	case ui.ActionSettings:
+		e.showSettingsDialog()
 	case ui.ActionBuffer1:
 		e.switchToBuffer(0)
 	case ui.ActionBuffer2:
@@ -2485,6 +2505,200 @@ func (e *Editor) handleConfigErrorMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			} else if innerX >= 36 && innerX < 46 {
 				e.configErrorChoice = 2
 				return e.executeConfigErrorChoice()
+			}
+		}
+	}
+
+	return e, nil
+}
+
+// showSettingsDialog opens the settings dialog
+func (e *Editor) showSettingsDialog() {
+	// Load current values into dialog state
+	if e.config != nil {
+		e.settingsWordWrap = e.config.Editor.WordWrap
+		e.settingsLineNumbers = e.config.Editor.LineNumbers
+		e.settingsSyntax = e.config.Editor.SyntaxHighlight
+		e.settingsScrollbar = e.config.Editor.Scrollbar
+		e.settingsBackupCount = e.config.Editor.BackupCount
+		e.settingsMaxBuffers = e.config.Editor.MaxBuffers
+	}
+	e.settingsIndex = 0
+	e.mode = ModeSettings
+}
+
+// handleSettingsKey handles key events in the settings dialog
+func (e *Editor) handleSettingsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Settings rows: 0-3 = checkboxes, 4-5 = numbers, 6 = Save, 7 = Cancel
+	const (
+		rowWordWrap    = 0
+		rowLineNumbers = 1
+		rowSyntax      = 2
+		rowScrollbar   = 3
+		rowBackupCount = 4
+		rowMaxBuffers  = 5
+		rowSave        = 6
+		rowCancel      = 7
+		maxRow         = 7
+	)
+
+	switch msg.Type {
+	case tea.KeyUp:
+		if e.settingsIndex > 0 {
+			e.settingsIndex--
+		}
+	case tea.KeyDown:
+		if e.settingsIndex < maxRow {
+			e.settingsIndex++
+		}
+	case tea.KeyLeft:
+		// Decrease number inputs or navigate to Save button
+		switch e.settingsIndex {
+		case rowBackupCount:
+			if e.settingsBackupCount > 0 {
+				e.settingsBackupCount--
+			}
+		case rowMaxBuffers:
+			if e.settingsMaxBuffers > 0 {
+				e.settingsMaxBuffers--
+			}
+		case rowCancel:
+			e.settingsIndex = rowSave
+		}
+	case tea.KeyRight:
+		// Increase number inputs or navigate to Cancel button
+		switch e.settingsIndex {
+		case rowBackupCount:
+			if e.settingsBackupCount < 99 {
+				e.settingsBackupCount++
+			}
+		case rowMaxBuffers:
+			if e.settingsMaxBuffers < 99 {
+				e.settingsMaxBuffers++
+			}
+		case rowSave:
+			e.settingsIndex = rowCancel
+		}
+	case tea.KeyEnter, tea.KeySpace:
+		switch e.settingsIndex {
+		case rowWordWrap:
+			e.settingsWordWrap = !e.settingsWordWrap
+		case rowLineNumbers:
+			e.settingsLineNumbers = !e.settingsLineNumbers
+		case rowSyntax:
+			e.settingsSyntax = !e.settingsSyntax
+		case rowScrollbar:
+			e.settingsScrollbar = !e.settingsScrollbar
+		case rowSave:
+			e.saveSettings()
+			e.mode = ModeNormal
+			e.statusbar.SetMessage("Settings saved", "success")
+		case rowCancel:
+			e.mode = ModeNormal
+		}
+	case tea.KeyEsc:
+		e.mode = ModeNormal
+	}
+	return e, nil
+}
+
+// saveSettings applies and saves the settings to config
+func (e *Editor) saveSettings() {
+	if e.config == nil {
+		return
+	}
+
+	// Apply to config
+	e.config.Editor.WordWrap = e.settingsWordWrap
+	e.config.Editor.LineNumbers = e.settingsLineNumbers
+	e.config.Editor.SyntaxHighlight = e.settingsSyntax
+	e.config.Editor.Scrollbar = e.settingsScrollbar
+	e.config.Editor.BackupCount = e.settingsBackupCount
+	e.config.Editor.MaxBuffers = e.settingsMaxBuffers
+
+	// Apply to current editor state
+	e.viewport.SetWordWrap(e.settingsWordWrap)
+	e.viewport.ShowLineNumbers(e.settingsLineNumbers)
+	e.activeDoc().highlighter.SetEnabled(e.settingsSyntax)
+	e.scrollbar.SetEnabled(e.settingsScrollbar)
+
+	// Update menu checkboxes to reflect new state
+	if e.settingsWordWrap {
+		e.menubar.SetItemLabel(ui.ActionWordWrap, "[x] Word Wrap")
+	} else {
+		e.menubar.SetItemLabel(ui.ActionWordWrap, "[ ] Word Wrap")
+	}
+	if e.settingsLineNumbers {
+		e.menubar.SetItemLabel(ui.ActionLineNumbers, "[x] Line Numbers")
+	} else {
+		e.menubar.SetItemLabel(ui.ActionLineNumbers, "[ ] Line Numbers")
+	}
+	if e.settingsSyntax {
+		e.menubar.SetItemLabel(ui.ActionSyntaxHighlight, "[x] Syntax Highlight")
+	} else {
+		e.menubar.SetItemLabel(ui.ActionSyntaxHighlight, "[ ] Syntax Highlight")
+	}
+	if e.settingsScrollbar {
+		e.menubar.SetItemLabel(ui.ActionScrollbar, "[x] Scrollbar")
+	} else {
+		e.menubar.SetItemLabel(ui.ActionScrollbar, "[ ] Scrollbar")
+	}
+
+	// Save to disk
+	go e.config.Save()
+}
+
+// handleSettingsMouse handles mouse input in the settings dialog
+func (e *Editor) handleSettingsMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	// Dialog dimensions (must match overlaySettingsDialog)
+	boxWidth := 54
+	boxHeight := 14 // title + empty + 4 checkboxes + 2 numbers + empty + buttons + bottom
+
+	startX := (e.width - boxWidth) / 2
+	startY := (e.viewport.Height() - boxHeight) / 2
+
+	mouseY := msg.Y - 1 // Adjust for menu bar
+	relX := msg.X - startX
+	relY := mouseY - startY
+
+	// Click outside = cancel
+	if relX < 0 || relX >= boxWidth || relY < 0 || relY >= boxHeight {
+		if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress {
+			e.mode = ModeNormal
+		}
+		return e, nil
+	}
+
+	if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress {
+		// Map Y position to row (rows start at line 2)
+		clickedRow := relY - 2
+		if clickedRow >= 0 && clickedRow <= 5 {
+			e.settingsIndex = clickedRow
+			// Toggle checkbox if clicking on checkbox rows
+			if clickedRow <= 3 {
+				switch clickedRow {
+				case 0:
+					e.settingsWordWrap = !e.settingsWordWrap
+				case 1:
+					e.settingsLineNumbers = !e.settingsLineNumbers
+				case 2:
+					e.settingsSyntax = !e.settingsSyntax
+				case 3:
+					e.settingsScrollbar = !e.settingsScrollbar
+				}
+			}
+		}
+
+		// Check button clicks (row 11 = buttons row, 0-indexed from dialog top)
+		if relY == 11 {
+			innerX := relX - 1
+			// [ Save ] centered around position ~15, [ Cancel ] around ~35
+			if innerX >= 12 && innerX < 22 {
+				e.saveSettings()
+				e.mode = ModeNormal
+				e.statusbar.SetMessage("Settings saved", "success")
+			} else if innerX >= 28 && innerX < 40 {
+				e.mode = ModeNormal
 			}
 		}
 	}
@@ -3737,6 +3951,11 @@ func (e *Editor) View() string {
 	// If config error dialog is open, overlay it centered on the viewport
 	if e.mode == ModeConfigError {
 		viewportContent = e.overlayConfigErrorDialog(viewportContent)
+	}
+
+	// If settings dialog is open, overlay it centered on the viewport
+	if e.mode == ModeSettings {
+		viewportContent = e.overlaySettingsDialog(viewportContent)
 	}
 
 	sb.WriteString(viewportContent)
