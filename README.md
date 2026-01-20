@@ -1,58 +1,101 @@
 # Textivus
 
-**Textivus** is a fast, friendly **terminal (TUI) text editor for Linux** inspired by the simplicity of **nano/micro**, with modern comforts like multi-file buffers, incremental search/replace, and syntax highlighting.
+**Textivus** is a fast, friendly **terminal (TUI) text editor for Linux** (and macOS) inspired by the simplicity of **nano/micro** and the familiarity of **DOS EDIT** — with modern comforts like multi-file buffers, incremental find/replace, and syntax highlighting.
 
-> A text editor for the rest of us!
+> **A text editor for the rest of us!**
 
-![Textivus Screenshot](screenshot.png)
+![Textivus terminal text editor screenshot](docs/screenshot.png)
 
-## Features
+---
 
-- **Instant startup** - No bloat, just editing
-- **Classic DOS EDIT styling** - Dark blue menu bar and status bar with cyan highlights
-- **Modern keyboard shortcuts** - Ctrl+S, Ctrl+C, Ctrl+V, Ctrl+Z, etc.
-- **Configurable keybindings** - Customize shortcuts via Options menu
-- **Multiple buffers** - Edit multiple files with fast switching (Alt+< / Alt+>)
-- **Recent files & directories** - Quick access to recently opened files and directories
-- **Favorites** - Star frequently-used files/directories for quick access
-- **Mouse support** - Click to position cursor, drag to select, scroll wheel
-- **Shift+Arrow selection** - Select text the modern way
-- **Word wrap** - Toggle via Options menu
-- **Line numbers** - Toggle via Options menu or Ctrl+L
-- **Syntax highlighting** - Auto-detected by file extension
-- **Find & Replace** - Ctrl+F to find, Ctrl+H to find and replace
-- **Go to Line** - Ctrl+G to jump to a specific line
-- **Cut Line** - Ctrl+K to cut the entire current line (like nano)
-- **Word & Character counts** - Displayed in the status bar
-- **Clipboard support** - Native X11/Wayland support, OSC52 for SSH
-- **Undo/Redo** - Ctrl+Z / Ctrl+Y with full history
+## Quick start
 
-## Installation
-
-### Quick Install (Linux/macOS)
-
-```bash
+### Install (Linux/macOS)
+```sh
 curl -fsSL https://raw.githubusercontent.com/cornish/textivus-editor/main/install.sh | sh
 ```
 
-Or download manually from [GitHub Releases](https://github.com/cornish/textivus-editor/releases).
+Or download binaries from **GitHub Releases**.
 
-### From Source
-
-Requires Go 1.21 or later.
-
-```bash
-git clone https://github.com/cornish/textivus-editor.git
-cd textivus-editor
-go build
-./textivus [filename]
+### Run
+```sh
+textivus README.md
 ```
 
-### Clipboard Support (Linux)
+---
+
+## Why Textivus?
+
+Textivus is for people who want a **comfortable, familiar editor in the terminal** without turning their console into an IDE.
+
+- **Instant startup** (no indexing, no plugins, no waiting)
+- **Modern shortcuts** by default (Ctrl+S / Ctrl+C / Ctrl+V / Ctrl+Z)
+- **Classic look** (DOS EDIT-inspired menu/status bars)
+- **Great for SSH** (includes OSC52 clipboard support)
+- **Sane features**: just enough power, without bloat
+
+---
+
+## Features
+
+- **Instant startup** — no bloat, just editing
+- **Customizable theming** — built-in DOS EDIT, light, dark and other themes; fully customizable
+- **Modern keyboard shortcuts** — Ctrl+S, Ctrl+C, Ctrl+V, Ctrl+Z, etc.
+- **Configurable keybindings** — customize shortcuts via Options menu
+- **Multiple buffers** — edit multiple files with fast switching (Alt+< / Alt+>)
+- **Recent files & directories** — quick access from menus
+- **Favorites** — star frequently-used files/directories
+- **Mouse support** — mouse supported, but optional; click to move cursor, drag to select, scroll wheel
+- **Shift+Arrow selection** — select text the modern way
+- **Word wrap** — toggle via Options menu
+- **Line numbers** — toggle via Options menu or Ctrl+L
+- **Syntax highlighting** — auto-detected by file extension
+- **Find & Replace** — Ctrl+F to find, Ctrl+H to find and replace
+- **Go to Line** — Ctrl+G to jump to a specific line
+- **Cut Line** — Ctrl+K cuts the entire current line (like nano)
+- **Word & character counts** — displayed in the status bar
+- **Clipboard support**
+  - System clipboard integration:
+    - X11: `xclip` / `xsel` *(install required)*
+    - Wayland: `wl-clipboard` (`wl-copy`, `wl-paste`) *(install required)*
+    - macOS: `pbcopy` / `pbpaste` *(built-in)*
+  - **OSC52 clipboard** support for remote SSH sessions
+- **Undo/Redo** — Ctrl+Z / Ctrl+Y with full history
+
+---
+
+## Non-goals
+
+Textivus is **not an IDE**.
+
+- No project indexing
+- No always-on language servers
+- No plugin marketplace
+- No telemetry
+
+---
+
+## Keyboard shortcuts (essentials)
+
+- **Save:** Ctrl+S  
+- **Open:** Ctrl+O  
+- **Quit:** Ctrl+Q  
+- **Find:** Ctrl+F  
+- **Replace:** Ctrl+H  
+- **Go to line:** Ctrl+G  
+- **Undo / Redo:** Ctrl+Z / Ctrl+Y  
+- **Cut line:** Ctrl+K  
+- **Switch buffers:** Alt+< / Alt+>
+
+Full shortcuts list: **[docs/shortcuts.md](docs/shortcuts.md)**
+
+---
+
+## Clipboard support (Linux)
 
 For clipboard integration with other applications, install one of:
 
-```bash
+```sh
 # X11
 sudo apt install xclip
 # or
@@ -62,264 +105,23 @@ sudo apt install xsel
 sudo apt install wl-clipboard
 ```
 
-Without these tools, copy/paste will only work within Textivus.
+Without these tools, copy/paste will still work **inside Textivus**, but won’t integrate with other apps.
 
-## Keyboard Shortcuts
+---
 
-### File Operations
-| Action | Shortcut |
-|--------|----------|
-| New | Ctrl+N |
-| Open | Ctrl+O |
-| Recent Files | Ctrl+R |
-| Recent Dirs | (File menu) |
-| Save | Ctrl+S |
-| Close | Ctrl+W |
-| Quit | Ctrl+Q |
+## Build from source
 
-### Buffers
-| Action | Shortcut |
-|--------|----------|
-| Previous Buffer | Alt+< |
-| Next Buffer | Alt+> |
-| Buffer 1-9 | Alt+1 through Alt+9 |
+Requires **Go 1.21+**.
 
-### Editing
-| Action | Shortcut |
-|--------|----------|
-| Undo | Ctrl+Z |
-| Redo | Ctrl+Y |
-| Cut | Ctrl+X |
-| Copy | Ctrl+C |
-| Paste | Ctrl+V |
-| Cut Line | Ctrl+K |
-| Select All | Ctrl+A |
-| Indent | Tab |
-| Dedent | Shift+Tab |
-| Block Indent | Tab (with selection) |
-| Block Dedent | Shift+Tab (with selection) |
-
-### Search
-| Action | Shortcut |
-|--------|----------|
-| Find | Ctrl+F |
-| Find Next | F3 |
-| Replace | Ctrl+H |
-| Go to Line | Ctrl+G |
-
-### Navigation
-| Action | Shortcut |
-|--------|----------|
-| Start of file | Ctrl+Home |
-| End of file | Ctrl+End |
-| Start of line | Home |
-| End of line | End |
-| Word left/right | Ctrl+Left/Right |
-| Page up/down | PgUp/PgDn |
-
-### Selection
-| Action | Shortcut |
-|--------|----------|
-| Select with cursor | Shift+Arrow |
-| Select word | Ctrl+Shift+Left/Right |
-| Select to line start/end | Shift+Home/End |
-| Select to file start/end | Ctrl+Shift+Home/End |
-
-### Options
-| Action | Shortcut |
-|--------|----------|
-| Toggle Line Numbers | Ctrl+L |
-
-## Menu Navigation
-
-- **F10** or click to open File menu
-- **Alt+F** File, **Alt+B** Buffers, **Alt+E** Edit, **Alt+S** Search, **Alt+O** Options, **Alt+H** Help
-- Arrow keys to navigate within menus
-- Press underlined letter to select item
-- Enter to select, Escape to close
-
-All keyboard shortcuts can be customized via **Options → Keybindings**.
-
-## File Browser
-
-The file browser (Ctrl+O to open, or File → Save As) supports:
-
-| Key | Action |
-|-----|--------|
-| Enter | Open file or enter directory |
-| F | Toggle favorite on selected item |
-| Backspace | Go to parent directory |
-| Esc | Cancel |
-
-### Favorites
-
-Press **F** on any file or directory to add it to your favorites. Favorited items show a star (★) next to their name.
-
-When you have favorites, a **★ Favorites** entry appears at the top of every directory listing. Enter it to see all your favorited files and directories in one place - a quick way to jump to frequently-used locations.
-
-Favorites are saved in your config file and persist across sessions.
-
-## Status Bar
-
-The status bar shows:
-- Filename (with * if modified)
-- Word count (W:xxx)
-- Character count (C:xxx)
-- Current line and column
-- File encoding (UTF-8)
-
-## Configuration
-
-Textivus stores its configuration in `~/.config/textivus/config.toml`:
-
-```toml
-[editor]
-word_wrap = false
-line_numbers = false
-syntax_highlight = true
-true_color = true    # Set to false for older terminals
-backup_count = 0     # 0=disabled, 1=filename~, 2+=numbered (filename~1~ newest)
-max_buffers = 20     # Maximum open buffers (0=unlimited)
-tab_width = 4        # Display width of tab characters
-tabs_to_spaces = false  # true = insert spaces, false = insert tab characters
-
-[theme]
-name = "default"  # or "dark", "light", "monokai", "nord", "dracula", "gruvbox", "solarized", "catppuccin"
-```
-
-### Keybindings
-
-Keybindings are stored in `~/.config/textivus/keybindings.toml` and can be edited via **Options → Keybindings**. Each action supports a primary and alternate binding:
-
-```toml
-[save]
-primary = "ctrl+s"
-
-[find]
-primary = "ctrl+f"
-alternate = "f3"
-```
-
-## Themes
-
-Textivus supports color themes with 9 built-in options:
-- **default** - Classic DOS EDIT style (blue/cyan)
-- **dark** - Modern dark theme
-- **light** - Light theme for bright environments
-- **monokai** - Monokai-inspired dark theme
-- **nord** - Arctic, north-bluish palette
-- **dracula** - Dark theme with vibrant colors
-- **gruvbox** - Retro groove color scheme
-- **solarized** - Precision colors (dark variant)
-- **catppuccin** - Soothing pastel theme (Mocha)
-
-Switch themes at runtime via the **Options** menu, or set the default in your config file.
-
-In the theme dialog, press **E** to edit a theme or **C** to copy it with a new name - the theme file will open directly in Textivus for editing.
-
-### Custom Themes
-
-Create custom themes in `~/.config/textivus/themes/`:
-
-```toml
-# ~/.config/textivus/themes/mytheme.toml
-name = "mytheme"
-description = "My custom theme"
-author = "Your Name"
-
-[ui]
-menu_bg = "#3B4252"
-menu_fg = "#ECEFF4"
-menu_highlight_bg = "#5E81AC"
-menu_highlight_fg = "#ECEFF4"
-status_bg = "#3B4252"
-status_fg = "#ECEFF4"
-status_accent = "#88C0D0"
-selection_bg = "#4C566A"
-selection_fg = "#ECEFF4"
-line_number = "#4C566A"
-line_number_active = "#D8DEE9"
-error_fg = "#BF616A"
-disabled_fg = "#4C566A"
-dialog_bg = "#3B4252"
-dialog_fg = "#ECEFF4"
-dialog_border = "#4C566A"
-dialog_title = "#88C0D0"
-dialog_button = "#5E81AC"
-dialog_button_fg = "#ECEFF4"
-
-[syntax]
-keyword = "#81A1C1"
-string = "#A3BE8C"
-comment = "#616E88"
-number = "#B48EAD"
-operator = "#81A1C1"
-function = "#88C0D0"
-type = "#8FBCBB"
-```
-
-Then reference it in your config: `name = "mytheme"`
-
-### Color Formats
-
-Colors can be specified as:
-- **ANSI 16 colors**: `"0"` - `"15"`
-- **256-color palette**: `"16"` - `"255"`
-- **Hex colors**: `"#RGB"` or `"#RRGGBB"`
-
-### True Color Support
-
-Hex colors use 24-bit "true color" by default, which requires a modern terminal:
-- iTerm2, Alacritty, Kitty, Windows Terminal
-- GNOME Terminal, Konsole, VS Code terminal
-
-For older terminals, set `true_color = false` in your config to automatically convert hex colors to the nearest 256-color match.
-
-## Non-goals
-
-Textivus is not an IDE:
-- No always-on language servers
-- No background project indexing
-- No plugin marketplace
-
-## Why "Textivus"?
-
-> "A Festivus for the rest of us!"
-
-Named as a nod to the Seinfeld holiday, because every text editor tries to be Vim or Emacs. Textivus is for the rest of us who just want to edit text.
-
-## Built With
-
-- [Bubbletea](https://github.com/charmbracelet/bubbletea) - TUI framework
-- [Lipgloss](https://github.com/charmbracelet/lipgloss) - Styling
-- [go-runewidth](https://github.com/mattn/go-runewidth) - Unicode width calculation
-- [Chroma](https://github.com/alecthomas/chroma) - Syntax highlighting
-
-## License
-
-MIT License - see [LICENSE](LICENSE) for details.
-
-## Contributing
-
-Contributions welcome! Feel free to submit issues and pull requests.
-
-### Development Setup
-
-After cloning, run:
-
-```bash
-make setup
-```
-
-This configures a pre-commit hook that auto-formats Go code. Other useful commands:
-
-```bash
-make build   # Build binary
-make test    # Run tests
-make fmt     # Format code
-make lint    # Run linters
+```sh
+git clone https://github.com/cornish/textivus-editor.git
+cd textivus-editor
+go build
+./textivus [filename]
 ```
 
 ---
 
-*"I got a lot of problems with you people!"* - Frank Costanza
+## License
+
+MIT
