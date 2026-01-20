@@ -8,18 +8,20 @@ import (
 
 // StatusBar represents the bottom status bar
 type StatusBar struct {
-	filename    string
-	modified    bool
-	line        int
-	col         int
-	totalLines  int
-	encoding    string
-	wordCount   int
-	charCount   int
-	message     string // Temporary message to display
-	messageType string // "info", "error", "success"
-	width       int
-	styles      Styles
+	filename     string
+	modified     bool
+	line         int
+	col          int
+	totalLines   int
+	encoding     string
+	wordCount    int
+	charCount    int
+	message      string // Temporary message to display
+	messageType  string // "info", "error", "success"
+	width        int
+	styles       Styles
+	bufferIndex  int // Current buffer index (0-based)
+	bufferCount  int // Total number of open buffers
 }
 
 // NewStatusBar creates a new status bar
@@ -89,6 +91,12 @@ func (s *StatusBar) SetStyles(styles Styles) {
 	s.styles = styles
 }
 
+// SetBufferInfo sets the current buffer index and total buffer count
+func (s *StatusBar) SetBufferInfo(index, count int) {
+	s.bufferIndex = index
+	s.bufferCount = count
+}
+
 // View renders the status bar
 func (s *StatusBar) View() string {
 	var sb strings.Builder
@@ -117,11 +125,18 @@ func (s *StatusBar) View() string {
 	}
 	sb.WriteString(filename)
 
+	// Buffer indicator (only show if multiple buffers)
+	bufferIndicator := ""
+	if s.bufferCount > 1 {
+		bufferIndicator = fmt.Sprintf(" [%d/%d]", s.bufferIndex+1, s.bufferCount)
+		sb.WriteString(bufferIndicator)
+	}
+
 	// Right side: word count, char count, line:col, encoding
 	right := fmt.Sprintf("W:%d C:%d | Ln %d, Col %d | %s", s.wordCount, s.charCount, s.line, s.col, s.encoding)
 
 	// Calculate spacing
-	leftLen := len(filename)
+	leftLen := len(filename) + len(bufferIndicator)
 	if s.modified {
 		leftLen++
 	}

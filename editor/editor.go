@@ -240,6 +240,58 @@ func (e *Editor) activeDoc() *Document {
 	return e.documents[e.activeIdx]
 }
 
+// switchToBuffer switches to the document at the given index
+func (e *Editor) switchToBuffer(idx int) {
+	if idx < 0 || idx >= len(e.documents) || idx == e.activeIdx {
+		return
+	}
+	// Save current scroll position
+	e.activeDoc().scrollY = e.viewport.ScrollY()
+
+	// Switch
+	e.activeIdx = idx
+
+	// Restore new doc's scroll position
+	e.viewport.SetScrollY(e.activeDoc().scrollY)
+
+	// Update title and status
+	e.updateTitle()
+	e.statusbar.SetMessage("", "")
+}
+
+// nextBuffer switches to the next buffer (wraps around)
+func (e *Editor) nextBuffer() {
+	if len(e.documents) <= 1 {
+		return
+	}
+	nextIdx := (e.activeIdx + 1) % len(e.documents)
+	e.switchToBuffer(nextIdx)
+}
+
+// prevBuffer switches to the previous buffer (wraps around)
+func (e *Editor) prevBuffer() {
+	if len(e.documents) <= 1 {
+		return
+	}
+	prevIdx := (e.activeIdx - 1 + len(e.documents)) % len(e.documents)
+	e.switchToBuffer(prevIdx)
+}
+
+// bufferCount returns the number of open buffers
+func (e *Editor) bufferCount() int {
+	return len(e.documents)
+}
+
+// findBufferByFilename returns the index of a buffer with the given filename, or -1 if not found
+func (e *Editor) findBufferByFilename(filename string) int {
+	for i, doc := range e.documents {
+		if doc.filename == filename {
+			return i
+		}
+	}
+	return -1
+}
+
 // New creates a new editor instance with default config
 func New() *Editor {
 	return NewWithConfig(config.DefaultConfig())
@@ -355,29 +407,64 @@ func detectUTF8Support() bool {
 
 // LoadFile loads a file into the editor
 func (e *Editor) LoadFile(filename string) error {
-	content, err := os.ReadFile(filename)
-	if err != nil {
-		return err
-	}
-
-	// Convert to absolute path for consistent directory navigation
+	// Convert to absolute path for consistent comparison
 	absPath, err := filepath.Abs(filename)
 	if err != nil {
 		absPath = filename // Fall back to original if Abs fails
 	}
 
-	e.activeDoc().buffer = NewBufferFromString(string(content))
-	e.activeDoc().cursor = NewCursor(e.activeDoc().buffer)
-	e.activeDoc().selection.Clear()
-	e.activeDoc().undoStack.Clear()
-	e.viewport.SetScrollY(0) // Reset scroll position for new file
-	e.activeDoc().filename = absPath
-	e.activeDoc().modified = false
+	// Check if file is already open - switch to it
+	if idx := e.findBufferByFilename(absPath); idx >= 0 {
+		e.switchToBuffer(idx)
+		e.statusbar.SetMessage("Switched to existing buffer", "info")
+		return nil
+	}
+
+	// Read file content
+	content, err := os.ReadFile(filename)
+	if err != nil {
+		return err
+	}
+
+	// Decide whether to reuse current buffer or create new one
+	// Reuse if: current buffer is unnamed AND unmodified AND empty
+	currentDoc := e.activeDoc()
+	reuseCurrentBuffer := currentDoc.filename == "" &&
+		!currentDoc.modified &&
+		currentDoc.buffer.LineCount() == 1 &&
+		len(currentDoc.buffer.Lines()[0]) == 0
+
+	if reuseCurrentBuffer {
+		// Reuse current buffer
+		currentDoc.buffer = NewBufferFromString(string(content))
+		currentDoc.cursor = NewCursor(currentDoc.buffer)
+		currentDoc.selection.Clear()
+		currentDoc.undoStack.Clear()
+		currentDoc.scrollY = 0
+		currentDoc.filename = absPath
+		currentDoc.modified = false
+		currentDoc.highlighter.SetFile(filename)
+	} else {
+		// Create new document
+		buf := NewBuffer()
+		buf = NewBufferFromString(string(content))
+		doc := &Document{
+			buffer:      buf,
+			cursor:      NewCursor(buf),
+			selection:   NewSelection(),
+			undoStack:   NewUndoStack(1000),
+			highlighter: syntax.New(filename),
+			filename:    absPath,
+			modified:    false,
+			scrollY:     0,
+		}
+		e.documents = append(e.documents, doc)
+		e.activeIdx = len(e.documents) - 1
+	}
+
+	e.viewport.SetScrollY(0)
 	e.updateTitle()
 	e.updateMenuState()
-
-	// Update syntax highlighter for new file
-	e.activeDoc().highlighter.SetFile(filename)
 
 	// Track in recent files
 	if e.config != nil {
@@ -962,6 +1049,16 @@ func (e *Editor) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				e.menubar.OpenMenu(4) // Help
 				e.updateViewportSize()
 				return e, nil
+			case '<': // Alt+< (same as nano)
+				if e.bufferCount() > 1 {
+					e.prevBuffer()
+				}
+				return e, nil
+			case '>': // Alt+> (same as nano)
+				if e.bufferCount() > 1 {
+					e.nextBuffer()
+				}
+				return e, nil
 			}
 		}
 		// Regular character input
@@ -1072,6 +1169,18 @@ func (e *Editor) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return e, nil
 	case "ctrl+h":
 		e.showFindReplace()
+		return e, nil
+
+	// Buffer switching (for terminals that pass through Ctrl+Tab)
+	case "ctrl+tab":
+		if e.bufferCount() > 1 {
+			e.nextBuffer()
+		}
+		return e, nil
+	case "ctrl+shift+tab":
+		if e.bufferCount() > 1 {
+			e.prevBuffer()
+		}
 		return e, nil
 
 	// Word movement
@@ -2246,13 +2355,30 @@ func (e *Editor) newFile() {
 }
 
 func (e *Editor) doNewFile() {
-	e.activeDoc().buffer = NewBuffer()
-	e.activeDoc().cursor = NewCursor(e.activeDoc().buffer)
-	e.activeDoc().selection.Clear()
-	e.activeDoc().undoStack.Clear()
-	e.activeDoc().filename = ""
-	e.activeDoc().modified = false
-	e.activeDoc().highlighter.SetFile("") // Clear syntax highlighter
+	// If current buffer is empty and untitled, just reuse it
+	currentDoc := e.activeDoc()
+	if currentDoc.filename == "" && !currentDoc.modified &&
+		currentDoc.buffer.LineCount() == 1 && len(currentDoc.buffer.Lines()[0]) == 0 {
+		// Already have an empty untitled buffer, nothing to do
+		e.statusbar.SetMessage("New file", "info")
+		return
+	}
+
+	// Create a new document
+	buf := NewBuffer()
+	doc := &Document{
+		buffer:      buf,
+		cursor:      NewCursor(buf),
+		selection:   NewSelection(),
+		undoStack:   NewUndoStack(100),
+		filename:    "",
+		modified:    false,
+		scrollY:     0,
+		highlighter: syntax.New(""),
+	}
+	e.documents = append(e.documents, doc)
+	e.activeIdx = len(e.documents) - 1
+
 	e.updateTitle()
 	e.updateMenuState()
 	e.statusbar.SetMessage("New file", "info")
@@ -2268,22 +2394,47 @@ func (e *Editor) closeFile() {
 }
 
 func (e *Editor) doCloseFile() {
-	e.activeDoc().buffer = NewBuffer()
-	e.activeDoc().cursor = NewCursor(e.activeDoc().buffer)
-	e.activeDoc().selection.Clear()
-	e.activeDoc().undoStack.Clear()
-	e.activeDoc().filename = ""
-	e.activeDoc().modified = false
-	e.activeDoc().highlighter.SetFile("")
+	if len(e.documents) > 1 {
+		// Multiple buffers - remove current and switch to another
+		e.documents = append(e.documents[:e.activeIdx], e.documents[e.activeIdx+1:]...)
+		if e.activeIdx >= len(e.documents) {
+			e.activeIdx = len(e.documents) - 1
+		}
+		// Restore scroll position of new active buffer
+		e.viewport.SetScrollY(e.activeDoc().scrollY)
+		e.statusbar.SetMessage("Buffer closed", "info")
+	} else {
+		// Single buffer - reset to empty
+		e.activeDoc().buffer = NewBuffer()
+		e.activeDoc().cursor = NewCursor(e.activeDoc().buffer)
+		e.activeDoc().selection.Clear()
+		e.activeDoc().undoStack.Clear()
+		e.activeDoc().filename = ""
+		e.activeDoc().modified = false
+		e.activeDoc().scrollY = 0
+		e.activeDoc().highlighter.SetFile("")
+		e.viewport.SetScrollY(0)
+		e.statusbar.SetMessage("File closed", "info")
+	}
 	e.updateTitle()
 	e.updateMenuState()
-	e.statusbar.SetMessage("File closed", "info")
 }
 
-// quitEditor exits the editor, checking for unsaved changes
+// quitEditor exits the editor, checking for unsaved changes in ALL buffers
 func (e *Editor) quitEditor() tea.Cmd {
-	if e.activeDoc().modified {
-		e.showPrompt("Unsaved changes. Quit anyway? (y/n): ", PromptConfirmQuit)
+	// Check all buffers for unsaved changes
+	unsavedCount := 0
+	for _, doc := range e.documents {
+		if doc.modified {
+			unsavedCount++
+		}
+	}
+	if unsavedCount > 0 {
+		msg := "Unsaved changes. Quit anyway? (y/n): "
+		if unsavedCount > 1 {
+			msg = fmt.Sprintf("%d unsaved buffers. Quit anyway? (y/n): ", unsavedCount)
+		}
+		e.showPrompt(msg, PromptConfirmQuit)
 		return nil
 	}
 	return tea.Quit
@@ -2749,6 +2900,7 @@ func (e *Editor) View() string {
 	e.statusbar.SetModified(e.activeDoc().modified)
 	e.statusbar.SetTotalLines(e.activeDoc().buffer.LineCount())
 	e.statusbar.SetCounts(e.activeDoc().buffer.WordCount(), e.activeDoc().buffer.RuneCount())
+	e.statusbar.SetBufferInfo(e.activeIdx, len(e.documents))
 	sb.WriteString(e.statusbar.View())
 
 	return sb.String()
