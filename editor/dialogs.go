@@ -585,6 +585,32 @@ func formatRecentPath(path string, maxWidth int) string {
 	return "..." + string(runes)
 }
 
+// overlayRecentDirsDialog overlays the recent directories dialog using DialogBuilder
+func (e *Editor) overlayRecentDirsDialog(viewportContent string) string {
+	if e.config == nil || len(e.config.RecentDirs) == 0 {
+		return viewportContent
+	}
+
+	// Use DialogBuilder for consistent dialog rendering
+	db := e.NewDialogBuilder(60)
+
+	db.AddTitleBorder(" Recent Directories ")
+	db.AddEmptyLine()
+
+	// Add recent directories as selectable items
+	for i, path := range e.config.RecentDirs {
+		// Show truncated path
+		display := formatRecentPath(path, db.InnerWidth())
+		db.AddSelectableItem(display, i == e.recentDirsIndex)
+	}
+
+	db.AddEmptyLine()
+	db.AddCenteredText("[Enter] Browse  [Del] Remove  [Esc] Cancel")
+	db.AddBottomBorder()
+
+	return db.Overlay(viewportContent, e.width, e.viewport.Height())
+}
+
 // overlayKeybindingsDialog overlays the keybindings configuration dialog
 func (e *Editor) overlayKeybindingsDialog(viewportContent string) string {
 	boxWidth := 64

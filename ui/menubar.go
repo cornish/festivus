@@ -16,6 +16,7 @@ const (
 	ActionNew
 	ActionOpen
 	ActionRecentFiles
+	ActionRecentDirs
 	ActionClose
 	ActionSave
 	ActionSaveAs
@@ -102,6 +103,7 @@ func NewMenuBar(styles Styles) *MenuBar {
 					{Label: "New", Shortcut: "Ctrl+N", HotKey: 'N', Action: ActionNew},
 					{Label: "Open", Shortcut: "Ctrl+O", HotKey: 'O', Action: ActionOpen},
 					{Label: "Recent Files", Shortcut: "Ctrl+R", HotKey: 'R', Action: ActionRecentFiles},
+					{Label: "Recent Dirs", Shortcut: "", HotKey: 'D', Action: ActionRecentDirs},
 					{Label: "Close", Shortcut: "Ctrl+W", HotKey: 'C', Action: ActionClose},
 					{Label: "Save", Shortcut: "Ctrl+S", HotKey: 'S', Action: ActionSave},
 					{Label: "Save As", Shortcut: "", HotKey: 'A', Action: ActionSaveAs},

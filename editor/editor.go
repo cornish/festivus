@@ -32,6 +32,7 @@ const (
 	ModeSaveAs
 	ModeTheme
 	ModeRecentFiles
+	ModeRecentDirs
 	ModeKeybindings
 )
 
@@ -243,6 +244,9 @@ type Editor struct {
 
 	// Recent files dialog state
 	recentFilesIndex int // Selected index in recent files dialog
+
+	// Recent directories dialog state
+	recentDirsIndex int // Selected index in recent dirs dialog
 
 	// Configuration
 	config      *config.Config
@@ -660,9 +664,10 @@ func (e *Editor) LoadFile(filename string) error {
 	e.updateTitle()
 	e.updateMenuState()
 
-	// Track in recent files
+	// Track in recent files and directories
 	if e.config != nil {
 		e.config.AddRecentFile(absPath)
+		e.config.AddRecentDir(filepath.Dir(absPath))
 		go e.config.Save()
 	}
 
@@ -716,6 +721,13 @@ func (e *Editor) doSave() bool {
 	e.statusbar.SetMessage("Saved: "+e.activeDoc().filename, "success")
 	e.updateTitle()
 	e.updateMenuState()
+
+	// Track directory in recent dirs
+	if e.config != nil {
+		e.config.AddRecentDir(filepath.Dir(e.activeDoc().filename))
+		go e.config.Save()
+	}
+
 	return true
 }
 
@@ -797,6 +809,13 @@ func (e *Editor) doSaveInDialog() bool {
 	e.fileBrowserError = ""
 	e.statusbar.SetMessage("Saved: "+e.activeDoc().filename, "success")
 	e.updateMenuState()
+
+	// Track directory in recent dirs
+	if e.config != nil {
+		e.config.AddRecentDir(filepath.Dir(e.activeDoc().filename))
+		go e.config.Save()
+	}
+
 	return true
 }
 
@@ -859,6 +878,9 @@ func (e *Editor) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if e.mode == ModeRecentFiles {
 			return e.handleRecentFilesMouse(msg)
+		}
+		if e.mode == ModeRecentDirs {
+			return e.handleRecentDirsMouse(msg)
 		}
 		if e.mode == ModeKeybindings {
 			return e.handleKeybindingsMouse(msg)
@@ -947,6 +969,11 @@ func (e *Editor) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Handle recent files mode
 	if e.mode == ModeRecentFiles {
 		return e.handleRecentFilesKey(msg)
+	}
+
+	// Handle recent directories mode
+	if e.mode == ModeRecentDirs {
+		return e.handleRecentDirsKey(msg)
 	}
 
 	// Handle keybindings mode
@@ -1697,6 +1724,8 @@ func (e *Editor) executeAction(action ui.MenuAction) (tea.Model, tea.Cmd) {
 		e.openFile()
 	case ui.ActionRecentFiles:
 		e.showRecentFiles()
+	case ui.ActionRecentDirs:
+		e.showRecentDirs()
 	case ui.ActionClose:
 		e.closeFile()
 	case ui.ActionSave:
@@ -2203,6 +2232,141 @@ func (e *Editor) handleRecentFilesMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	case tea.MouseButtonWheelDown:
 		if e.recentFilesIndex < recentCount-1 {
 			e.recentFilesIndex++
+		}
+	}
+
+	return e, nil
+}
+
+// showRecentDirs opens the recent directories dialog
+func (e *Editor) showRecentDirs() {
+	if e.config == nil || len(e.config.RecentDirs) == 0 {
+		e.statusbar.SetMessage("No recent directories", "info")
+		return
+	}
+	e.recentDirsIndex = 0
+	e.mode = ModeRecentDirs
+}
+
+// handleRecentDirsKey handles key events in the recent directories dialog
+func (e *Editor) handleRecentDirsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	recentCount := 0
+	if e.config != nil {
+		recentCount = len(e.config.RecentDirs)
+	}
+
+	switch msg.Type {
+	case tea.KeyUp:
+		if e.recentDirsIndex > 0 {
+			e.recentDirsIndex--
+		}
+	case tea.KeyDown:
+		if e.recentDirsIndex < recentCount-1 {
+			e.recentDirsIndex++
+		}
+	case tea.KeyEnter:
+		// Navigate to selected directory in file browser
+		if e.recentDirsIndex >= 0 && e.recentDirsIndex < recentCount {
+			path := e.config.RecentDirs[e.recentDirsIndex]
+			e.fileBrowserDir = path
+			e.fileBrowserSelected = 0
+			e.fileBrowserScroll = 0
+			e.fileBrowserError = ""
+			e.loadDirectory(path)
+			e.mode = ModeFileBrowser
+			e.statusbar.SetMessage("Browsing: "+path, "info")
+		}
+	case tea.KeyEsc:
+		e.mode = ModeNormal
+	case tea.KeyDelete, tea.KeyBackspace:
+		// Remove selected directory from recent list
+		if e.recentDirsIndex >= 0 && e.recentDirsIndex < recentCount {
+			e.config.RecentDirs = append(
+				e.config.RecentDirs[:e.recentDirsIndex],
+				e.config.RecentDirs[e.recentDirsIndex+1:]...,
+			)
+			go e.config.Save()
+			// Adjust index if needed
+			if e.recentDirsIndex >= len(e.config.RecentDirs) {
+				e.recentDirsIndex = len(e.config.RecentDirs) - 1
+			}
+			// Close dialog if list is now empty
+			if len(e.config.RecentDirs) == 0 {
+				e.mode = ModeNormal
+				e.statusbar.SetMessage("Recent directories cleared", "info")
+			}
+		}
+	}
+	return e, nil
+}
+
+// handleRecentDirsMouse handles mouse input in the recent directories dialog
+func (e *Editor) handleRecentDirsMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	recentCount := 0
+	if e.config != nil {
+		recentCount = len(e.config.RecentDirs)
+	}
+	if recentCount == 0 {
+		return e, nil
+	}
+
+	// Calculate dialog position (must match overlayRecentDirsDialog)
+	boxWidth := 60
+	boxHeight := recentCount + 5 // title, empty, items..., empty, footer, bottom
+
+	startX := (e.width - boxWidth) / 2
+	startY := (e.viewport.Height() - boxHeight) / 2
+
+	// Adjust mouse Y for menu bar
+	mouseY := msg.Y - 1
+
+	// Calculate relative position within dialog
+	relX := msg.X - startX
+	relY := mouseY - startY
+
+	// Check if click is outside dialog - close it
+	if relX < 0 || relX >= boxWidth || relY < 0 || relY >= boxHeight {
+		if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress {
+			e.mode = ModeNormal
+		}
+		return e, nil
+	}
+
+	// Directory list starts at line 2 (after title border and empty line)
+	listStart := 2
+	listEnd := listStart + recentCount
+
+	switch msg.Button {
+	case tea.MouseButtonLeft:
+		if msg.Action == tea.MouseActionPress {
+			if relY >= listStart && relY < listEnd {
+				clickedIdx := relY - listStart
+				if clickedIdx >= 0 && clickedIdx < recentCount {
+					if e.recentDirsIndex == clickedIdx {
+						// Double-click effect: open directory in browser
+						path := e.config.RecentDirs[e.recentDirsIndex]
+						e.fileBrowserDir = path
+						e.fileBrowserSelected = 0
+						e.fileBrowserScroll = 0
+						e.fileBrowserError = ""
+						e.loadDirectory(path)
+						e.mode = ModeFileBrowser
+						e.statusbar.SetMessage("Browsing: "+path, "info")
+					} else {
+						e.recentDirsIndex = clickedIdx
+					}
+				}
+			}
+		}
+
+	case tea.MouseButtonWheelUp:
+		if e.recentDirsIndex > 0 {
+			e.recentDirsIndex--
+		}
+
+	case tea.MouseButtonWheelDown:
+		if e.recentDirsIndex < recentCount-1 {
+			e.recentDirsIndex++
 		}
 	}
 
@@ -3439,6 +3603,11 @@ func (e *Editor) View() string {
 	// If recent files dialog is open, overlay it centered on the viewport
 	if e.mode == ModeRecentFiles {
 		viewportContent = e.overlayRecentFilesDialog(viewportContent)
+	}
+
+	// If recent directories dialog is open, overlay it centered on the viewport
+	if e.mode == ModeRecentDirs {
+		viewportContent = e.overlayRecentDirsDialog(viewportContent)
 	}
 
 	// If keybindings dialog is open, overlay it centered on the viewport
