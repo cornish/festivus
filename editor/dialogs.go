@@ -762,7 +762,7 @@ func (e *Editor) overlayEncodingDialog(viewportContent string) string {
 	boxWidth := 50
 	db := e.NewDialogBuilder(boxWidth)
 
-	db.AddTitleBorder(" Set Encoding ")
+	db.AddTitleBorder(" Save As Encoding ")
 	db.AddEmptyLine()
 
 	// Get list of supported encodings
@@ -796,6 +796,7 @@ func (e *Editor) overlayEncodingDialog(viewportContent string) string {
 	}
 
 	db.AddEmptyLine()
+	db.AddCenteredText("Changes encoding used when saving")
 	db.AddCenteredText("[Enter] Select  [Esc] Cancel")
 	db.AddBottomBorder()
 

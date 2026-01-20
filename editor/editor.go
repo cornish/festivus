@@ -2888,8 +2888,8 @@ func (e *Editor) handleEncodingMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 	// Dialog dimensions (must match overlayEncodingDialog)
 	boxWidth := 50
-	// title + empty + encodings + empty + footer + bottom border
-	boxHeight := encodingCount + 5
+	// title + empty + encodings + empty + help + footer + bottom border
+	boxHeight := encodingCount + 6
 
 	startX := (e.width - boxWidth) / 2
 	startY := (e.viewport.Height() - boxHeight) / 2
@@ -2925,7 +2925,8 @@ func (e *Editor) handleEncodingMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	return e, nil
 }
 
-// applyEncoding changes the document encoding and reloads if needed
+// applyEncoding changes the encoding the document will be saved as
+// This does NOT reload the file - it just changes the save encoding
 func (e *Editor) applyEncoding(newEnc *enc.Encoding) {
 	doc := e.activeDoc()
 	if doc == nil {
@@ -2938,48 +2939,9 @@ func (e *Editor) applyEncoding(newEnc *enc.Encoding) {
 		return
 	}
 
-	// If no file is loaded (new buffer), just set the encoding
-	if doc.filename == "" {
-		doc.encoding = newEnc
-		e.statusbar.SetMessage("Encoding: "+newEnc.Name, "info")
-		return
-	}
-
-	// File exists - reload with new encoding
-	data, err := os.ReadFile(doc.filename)
-	if err != nil {
-		e.statusbar.SetMessage("Error reading file: "+err.Error(), "error")
-		return
-	}
-
-	// Decode with the new encoding
-	decoded, err := enc.DecodeToUTF8(data, newEnc)
-	if err != nil {
-		e.statusbar.SetMessage("Error decoding: "+err.Error(), "error")
-		return
-	}
-
-	// Replace buffer content
-	content := string(decoded)
-
-	// Create new buffer with decoded content
-	doc.buffer = NewBufferFromString(content)
+	// Just change the encoding - content stays the same
 	doc.encoding = newEnc
-
-	// Reset cursor and selection
-	doc.cursor = NewCursor(doc.buffer)
-	doc.selection = &Selection{}
-	doc.undoStack = NewUndoStack(1000)
-
-	// Update viewport
-	e.viewport.SetScrollY(0)
-
-	// Re-set file for syntax highlighter
-	if doc.highlighter != nil {
-		doc.highlighter.SetFile(doc.filename)
-	}
-
-	e.statusbar.SetMessage("Reloaded as "+newEnc.Name, "info")
+	e.statusbar.SetMessage("Will save as "+newEnc.Name, "info")
 }
 
 // showKeybindingsDialog opens the keybindings configuration dialog
