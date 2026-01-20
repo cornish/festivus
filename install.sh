@@ -178,7 +178,11 @@ main() {
     mv "$TMP_DIR/$BINARY_NAME" "$BIN_DIR/$BINARY_NAME"
     chmod +x "$BIN_DIR/$BINARY_NAME"
 
+    # Create txv shortcut symlink
+    ln -sf "$BIN_DIR/$BINARY_NAME" "$BIN_DIR/txv"
+
     success "Installed to $BIN_DIR/$BINARY_NAME"
+    success "Created shortcut: txv -> textivus"
 
     # Check if BIN_DIR is in PATH
     case ":$PATH:" in

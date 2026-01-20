@@ -18,6 +18,7 @@
   - [ ] AUR package (Arch Linux)
 - [x] Curl install script (one-liner installation)
 - [x] GitHub Releases with pre-built binaries
+- [ ] (maybe) Add `txv` shortcut to distribution packages (Homebrew, .deb, .rpm, AUR)
 
 ## Tier 2: MVP Gaps
 
