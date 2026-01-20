@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Festivus is a terminal-based text editor inspired by DOS EDIT, built with Go and the Bubbletea TUI framework. "A text editor for the rest of us."
+Textivus is a terminal-based text editor inspired by DOS EDIT, built with Go and the Bubbletea TUI framework. "A text editor for the rest of us."
 
 ## Tech Stack
 
@@ -16,7 +16,7 @@ Festivus is a terminal-based text editor inspired by DOS EDIT, built with Go and
 
 ```bash
 go build
-./festivus [filename]
+./textivus [filename]
 ```
 
 ## Project Structure

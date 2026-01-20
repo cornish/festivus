@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"festivus/config"
+	"github.com/cornish/textivus-editor/config"
 
 	"github.com/charmbracelet/lipgloss"
 )

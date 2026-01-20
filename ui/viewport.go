@@ -4,7 +4,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"festivus/syntax"
+	"github.com/cornish/textivus-editor/syntax"
 
 	"github.com/mattn/go-runewidth"
 )

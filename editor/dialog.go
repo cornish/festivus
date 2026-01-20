@@ -1,7 +1,7 @@
 package editor
 
 import (
-	"festivus/ui"
+	"github.com/cornish/textivus-editor/ui"
 	"strings"
 
 	"github.com/mattn/go-runewidth"

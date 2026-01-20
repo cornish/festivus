@@ -9,11 +9,11 @@ import (
 	"strings"
 	"time"
 
-	"festivus/clipboard"
-	"festivus/config"
-	enc "festivus/encoding"
-	"festivus/syntax"
-	"festivus/ui"
+	"github.com/cornish/textivus-editor/clipboard"
+	"github.com/cornish/textivus-editor/config"
+	enc "github.com/cornish/textivus-editor/encoding"
+	"github.com/cornish/textivus-editor/syntax"
+	"github.com/cornish/textivus-editor/ui"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -2544,7 +2544,7 @@ func (e *Editor) executeConfigErrorChoice() (tea.Model, tea.Cmd) {
 		if err := e.LoadFile(e.configErrorFile); err != nil {
 			e.statusbar.SetMessage("Could not open config: "+err.Error(), "error")
 		} else {
-			e.statusbar.SetMessage("Edit config file, then restart Festivus", "info")
+			e.statusbar.SetMessage("Edit config file, then restart Textivus", "info")
 		}
 	case 1: // Use Defaults
 		e.mode = ModeNormal
@@ -3990,7 +3990,7 @@ func (e *Editor) quitEditor() tea.Cmd {
 
 // updateTitle sets the terminal title
 func (e *Editor) updateTitle() {
-	e.pendingTitle = "festivus"
+	e.pendingTitle = "textivus"
 	if e.activeDoc().filename != "" {
 		e.pendingTitle += " - " + e.activeDoc().filename
 	} else {

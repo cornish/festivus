@@ -1,7 +1,7 @@
 package editor
 
 import (
-	"festivus/ui"
+	"github.com/cornish/textivus-editor/ui"
 	"fmt"
 	"os"
 	"path/filepath"

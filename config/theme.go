@@ -8,7 +8,7 @@ import (
 )
 
 // Theme holds complete color theme settings
-// This is the format for theme TOML files in ~/.config/festivus/themes/
+// This is the format for theme TOML files in ~/.config/textivus/themes/
 type Theme struct {
 	// Metadata
 	Name        string `toml:"name"`
@@ -65,7 +65,7 @@ var builtinThemes = map[string]Theme{
 	"default": {
 		Name:        "default",
 		Description: "Classic DOS EDIT style - blue with cyan highlights",
-		Author:      "Festivus",
+		Author:      "Textivus",
 		UI: UIColors{
 			MenuBg:           "4",  // Dark blue
 			MenuFg:           "15", // Bright white
@@ -102,7 +102,7 @@ var builtinThemes = map[string]Theme{
 	"dark": {
 		Name:        "dark",
 		Description: "Modern dark theme with muted colors",
-		Author:      "Festivus",
+		Author:      "Textivus",
 		UI: UIColors{
 			MenuBg:           "236", // Dark gray
 			MenuFg:           "252", // Light gray
@@ -139,7 +139,7 @@ var builtinThemes = map[string]Theme{
 	"light": {
 		Name:        "light",
 		Description: "Light theme for bright environments",
-		Author:      "Festivus",
+		Author:      "Textivus",
 		UI: UIColors{
 			MenuBg:           "254", // Light gray
 			MenuFg:           "235", // Dark gray
@@ -176,7 +176,7 @@ var builtinThemes = map[string]Theme{
 	"monokai": {
 		Name:        "monokai",
 		Description: "Monokai-inspired dark theme",
-		Author:      "Festivus",
+		Author:      "Textivus",
 		UI: UIColors{
 			MenuBg:           "235", // Dark background
 			MenuFg:           "231", // White

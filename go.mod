@@ -1,4 +1,4 @@
-module festivus
+module github.com/cornish/textivus-editor
 
 go 1.24.5
 

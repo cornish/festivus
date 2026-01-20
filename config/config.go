@@ -1,11 +1,112 @@
 package config
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 
 	"github.com/BurntSushi/toml"
 )
+
+// configDirName is the name of the config directory
+const configDirName = "textivus"
+
+// oldConfigDirName is the legacy config directory name (for migration)
+const oldConfigDirName = "festivus"
+
+// configMigrated tracks whether migration has been attempted this session
+var configMigrated bool
+
+// MigrateConfig checks for old festivus config and migrates to textivus
+// This should be called once at startup before any config operations
+func MigrateConfig() error {
+	if configMigrated {
+		return nil
+	}
+	configMigrated = true
+
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil // Can't determine config dir, skip migration
+		}
+		configDir = filepath.Join(home, ".config")
+	}
+
+	oldDir := filepath.Join(configDir, oldConfigDirName)
+	newDir := filepath.Join(configDir, configDirName)
+
+	// Check if old dir exists and new dir doesn't
+	oldInfo, oldErr := os.Stat(oldDir)
+	_, newErr := os.Stat(newDir)
+
+	if oldErr == nil && oldInfo.IsDir() && os.IsNotExist(newErr) {
+		// Old exists, new doesn't - migrate by copying
+		if err := copyDir(oldDir, newDir); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// copyDir recursively copies a directory
+func copyDir(src, dst string) error {
+	srcInfo, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(dst, srcInfo.Mode()); err != nil {
+		return err
+	}
+
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+
+	for _, entry := range entries {
+		srcPath := filepath.Join(src, entry.Name())
+		dstPath := filepath.Join(dst, entry.Name())
+
+		if entry.IsDir() {
+			if err := copyDir(srcPath, dstPath); err != nil {
+				return err
+			}
+		} else {
+			if err := copyFile(srcPath, dstPath); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+// copyFile copies a single file
+func copyFile(src, dst string) error {
+	srcFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer srcFile.Close()
+
+	srcInfo, err := srcFile.Stat()
+	if err != nil {
+		return err
+	}
+
+	dstFile, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, srcInfo.Mode())
+	if err != nil {
+		return err
+	}
+	defer dstFile.Close()
+
+	_, err = io.Copy(dstFile, srcFile)
+	return err
+}
 
 // Config holds the editor configuration
 type Config struct {
@@ -247,7 +348,7 @@ func ConfigPath() (string, error) {
 		}
 		configDir = filepath.Join(home, ".config")
 	}
-	return filepath.Join(configDir, "festivus", "config.toml"), nil
+	return filepath.Join(configDir, configDirName, "config.toml"), nil
 }
 
 // ThemesDir returns the path to the user themes directory
@@ -260,7 +361,7 @@ func ThemesDir() (string, error) {
 		}
 		configDir = filepath.Join(home, ".config")
 	}
-	return filepath.Join(configDir, "festivus", "themes"), nil
+	return filepath.Join(configDir, configDirName, "themes"), nil
 }
 
 // ConfigLoadError holds details about a config loading error
@@ -318,7 +419,7 @@ func (c *Config) Save() error {
 	defer f.Close()
 
 	// Write header comment
-	f.WriteString("# Festivus configuration\n\n")
+	f.WriteString("# Textivus configuration\n\n")
 
 	// Encode config as TOML
 	encoder := toml.NewEncoder(f)

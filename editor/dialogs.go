@@ -1,9 +1,9 @@
 package editor
 
 import (
-	"festivus/config"
-	enc "festivus/encoding"
-	"festivus/ui"
+	"github.com/cornish/textivus-editor/config"
+	enc "github.com/cornish/textivus-editor/encoding"
+	"github.com/cornish/textivus-editor/ui"
 	"fmt"
 	"strings"
 
@@ -172,29 +172,29 @@ func (e *Editor) overlayAboutDialog(viewportContent string) string {
 	if e.box.Lock == "*" {
 		// ASCII mode - use asterisk art
 		logoLines = []string{
-			"      *****  *****   ****  *****  ***  *   *  *   *   ****      ",
-			"      *      *      *        *     *   *   *  *   *  *          ",
-			"      ****   ****    ***     *     *   *   *  *   *   ***       ",
-			"      *      *          *    *     *    * *   *   *      *      ",
-			"      *      *****  ****     *    ***    *     ***   ****       ",
-			"                                                                ",
+			"     *****  *****  *   *  *****  ***  *   *  *   *   ****      ",
+			"       *    *       * *     *     *   *   *  *   *  *          ",
+			"       *    ****     *      *     *   *   *  *   *   ***       ",
+			"       *    *       * *     *     *    * *   *   *      *      ",
+			"       *    *****  *   *    *    ***    *     ***   ****       ",
+			"                                                               ",
 		}
 	} else {
 		// Unicode mode - use block art
 		logoLines = []string{
-			" ███████╗███████╗███████╗████████╗██╗██╗   ██╗██╗   ██╗███████╗ ",
-			" ██╔════╝██╔════╝██╔════╝╚══██╔══╝██║██║   ██║██║   ██║██╔════╝ ",
-			" █████╗  █████╗  ███████╗   ██║   ██║██║   ██║██║   ██║███████╗ ",
-			" ██╔══╝  ██╔══╝  ╚════██║   ██║   ██║╚██╗ ██╔╝██║   ██║╚════██║ ",
-			" ██║     ███████╗███████║   ██║   ██║ ╚████╔╝ ╚██████╔╝███████║ ",
-			" ╚═╝     ╚══════╝╚══════╝   ╚═╝   ╚═╝  ╚═══╝   ╚═════╝ ╚══════╝ ",
+			" ████████╗███████╗██╗  ██╗████████╗██╗██╗   ██╗██╗   ██╗███████╗",
+			" ╚══██╔══╝██╔════╝╚██╗██╔╝╚══██╔══╝██║██║   ██║██║   ██║██╔════╝",
+			"    ██║   █████╗   ╚███╔╝    ██║   ██║██║   ██║██║   ██║███████╗",
+			"    ██║   ██╔══╝   ██╔██╗    ██║   ██║╚██╗ ██╔╝██║   ██║╚════██║",
+			"    ██║   ███████╗██╔╝ ██╗   ██║   ██║ ╚████╔╝ ╚██████╔╝███████║",
+			"    ╚═╝   ╚══════╝╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═══╝   ╚═════╝ ╚══════╝",
 		}
 	}
 
 	var aboutLines []string
 
 	// Top border with title
-	title := " About Festivus "
+	title := " About Textivus "
 	titlePadLeft := (innerWidth - len(title)) / 2
 	titlePadRight := innerWidth - len(title) - titlePadLeft
 	aboutLines = append(aboutLines, e.box.TopLeft+strings.Repeat(e.box.Horizontal, titlePadLeft)+title+strings.Repeat(e.box.Horizontal, titlePadRight)+e.box.TopRight)
@@ -213,7 +213,7 @@ func (e *Editor) overlayAboutDialog(viewportContent string) string {
 		e.box.Vertical+centerText("A Text Editor for the Rest of Us")+e.box.Vertical,
 		e.box.Vertical+strings.Repeat(" ", innerWidth)+e.box.Vertical,
 		e.box.Vertical+centerText("Version 0.1.0")+e.box.Vertical,
-		e.box.Vertical+centerText("github.com/cornish/festivus")+e.box.Vertical,
+		e.box.Vertical+centerText("github.com/cornish/textivus-editor")+e.box.Vertical,
 		e.box.Vertical+centerText("Copyright (c) 2025")+e.box.Vertical,
 		e.box.Vertical+strings.Repeat(" ", innerWidth)+e.box.Vertical,
 	)

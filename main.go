@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	"festivus/config"
-	"festivus/editor"
+	"github.com/cornish/textivus-editor/config"
+	"github.com/cornish/textivus-editor/editor"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -22,7 +22,7 @@ func main() {
 	for _, arg := range args {
 		switch arg {
 		case "--version", "-v":
-			fmt.Printf("festivus %s\n", version)
+			fmt.Printf("textivus %s\n", version)
 			os.Exit(0)
 		case "--help", "-h":
 			printHelp()
@@ -38,6 +38,9 @@ func main() {
 
 	// Detect terminal capabilities early
 	config.InitCapabilities()
+
+	// Migrate config from old location if needed
+	config.MigrateConfig()
 
 	// Load configuration
 	cfg, configErr := config.Load()
@@ -88,9 +91,9 @@ func isFlag(s string) bool {
 }
 
 func printHelp() {
-	fmt.Println("Festivus - A Text Editor for the Rest of Us")
+	fmt.Println("Textivus - A Text Editor for the Rest of Us")
 	fmt.Println()
-	fmt.Println("Usage: festivus [options] [file]")
+	fmt.Println("Usage: textivus [options] [file]")
 	fmt.Println()
 	fmt.Println("Options:")
 	fmt.Println("  -h, --help     Show this help message")

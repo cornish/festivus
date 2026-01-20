@@ -142,7 +142,7 @@ func KeybindingsPath() (string, error) {
 		}
 		configDir = filepath.Join(home, ".config")
 	}
-	return filepath.Join(configDir, "festivus", "keybindings.toml"), nil
+	return filepath.Join(configDir, configDirName, "keybindings.toml"), nil
 }
 
 // LoadKeybindings loads keybindings from disk, returning defaults if not found
@@ -183,7 +183,7 @@ func (kb *KeybindingsConfig) Save() error {
 	}
 	defer f.Close()
 
-	f.WriteString("# Festivus keybindings\n")
+	f.WriteString("# Textivus keybindings\n")
 	f.WriteString("# Format: primary = \"key\", alternate = \"key\" (optional)\n")
 	f.WriteString("# Examples: \"ctrl+s\", \"alt+f\", \"f1\", \"ctrl+shift+s\"\n\n")
 

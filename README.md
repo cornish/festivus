@@ -1,10 +1,10 @@
-# Festivus
+# Textivus
 
-**A Text Editor for the Rest of Us**
+**Textivus** is a fast, friendly **terminal (TUI) text editor for Linux** inspired by the simplicity of **nano/micro**, with modern comforts like multi-file buffers, incremental search/replace, and syntax highlighting.
 
-Festivus is a terminal-based text editor inspired by the classic DOS EDIT, built with Go and the [Bubbletea](https://github.com/charmbracelet/bubbletea) TUI framework.
+> A text editor for the rest of us!
 
-![Festivus Screenshot](screenshot.png)
+![Textivus Screenshot](screenshot.png)
 
 ## Features
 
@@ -34,10 +34,10 @@ Festivus is a terminal-based text editor inspired by the classic DOS EDIT, built
 Requires Go 1.21 or later.
 
 ```bash
-git clone https://github.com/cornish/festivus.git
-cd festivus
+git clone https://github.com/cornish/textivus-editor.git
+cd textivus-editor
 go build
-./festivus [filename]
+./textivus [filename]
 ```
 
 ### Clipboard Support (Linux)
@@ -54,7 +54,7 @@ sudo apt install xsel
 sudo apt install wl-clipboard
 ```
 
-Without these tools, copy/paste will only work within Festivus.
+Without these tools, copy/paste will only work within Textivus.
 
 ## Keyboard Shortcuts
 
@@ -162,7 +162,7 @@ The status bar shows:
 
 ## Configuration
 
-Festivus stores its configuration in `~/.config/festivus/config.toml`:
+Textivus stores its configuration in `~/.config/textivus/config.toml`:
 
 ```toml
 [editor]
@@ -181,7 +181,7 @@ name = "default"  # or "dark", "light", "monokai", "nord", "dracula", "gruvbox",
 
 ### Keybindings
 
-Keybindings are stored in `~/.config/festivus/keybindings.toml` and can be edited via **Options → Keybindings**. Each action supports a primary and alternate binding:
+Keybindings are stored in `~/.config/textivus/keybindings.toml` and can be edited via **Options → Keybindings**. Each action supports a primary and alternate binding:
 
 ```toml
 [save]
@@ -194,7 +194,7 @@ alternate = "f3"
 
 ## Themes
 
-Festivus supports color themes with 9 built-in options:
+Textivus supports color themes with 9 built-in options:
 - **default** - Classic DOS EDIT style (blue/cyan)
 - **dark** - Modern dark theme
 - **light** - Light theme for bright environments
@@ -207,14 +207,14 @@ Festivus supports color themes with 9 built-in options:
 
 Switch themes at runtime via the **Options** menu, or set the default in your config file.
 
-In the theme dialog, press **E** to edit a theme or **C** to copy it with a new name - the theme file will open directly in Festivus for editing.
+In the theme dialog, press **E** to edit a theme or **C** to copy it with a new name - the theme file will open directly in Textivus for editing.
 
 ### Custom Themes
 
-Create custom themes in `~/.config/festivus/themes/`:
+Create custom themes in `~/.config/textivus/themes/`:
 
 ```toml
-# ~/.config/festivus/themes/mytheme.toml
+# ~/.config/textivus/themes/mytheme.toml
 name = "mytheme"
 description = "My custom theme"
 author = "Your Name"
@@ -267,11 +267,18 @@ Hex colors use 24-bit "true color" by default, which requires a modern terminal:
 
 For older terminals, set `true_color = false` in your config to automatically convert hex colors to the nearest 256-color match.
 
-## Why "Festivus"?
+## Non-goals
+
+Textivus is not an IDE:
+- No always-on language servers
+- No background project indexing
+- No plugin marketplace
+
+## Why "Textivus"?
 
 > "A Festivus for the rest of us!"
 
-Named after the holiday from Seinfeld, because every text editor tries to be Vim or Emacs. Festivus is for the rest of us who just want to edit text.
+Named as a nod to the Seinfeld holiday, because every text editor tries to be Vim or Emacs. Textivus is for the rest of us who just want to edit text.
 
 ## Built With
 

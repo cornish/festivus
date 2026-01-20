@@ -250,8 +250,8 @@ func TestConfigPath(t *testing.T) {
 		t.Errorf("ConfigPath() base = %q, want 'config.toml'", filepath.Base(path))
 	}
 
-	if !contains(path, "festivus") {
-		t.Errorf("ConfigPath() = %q, should contain 'festivus'", path)
+	if !contains(path, "textivus") {
+		t.Errorf("ConfigPath() = %q, should contain 'textivus'", path)
 	}
 }
 

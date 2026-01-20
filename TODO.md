@@ -1,4 +1,4 @@
-# Festivus TODO
+# Textivus TODO
 
 ## Tier 1: CI, Distribution & Installation
 
@@ -66,7 +66,7 @@
 
 ## Bloat to Avoid
 
-These features are explicitly out of scope to keep Festivus fast and focused:
+These features are explicitly out of scope to keep Textivus fast and focused:
 
 - Always-on language servers
 - Background project indexing
