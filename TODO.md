@@ -2,22 +2,22 @@
 
 ## Tier 1: CI, Distribution & Installation
 
-- [ ] GitHub Actions CI
-  - [ ] Build on push/PR
-  - [ ] Run tests
-  - [ ] Release workflow (tag-triggered)
-- [ ] Build targets
-  - [ ] linux/amd64
-  - [ ] linux/arm64
-  - [ ] darwin/amd64
-  - [ ] darwin/arm64 (Apple Silicon)
+- [x] GitHub Actions CI
+  - [x] Build on push/PR
+  - [x] Run tests
+  - [x] Release workflow (tag-triggered)
+- [x] Build targets
+  - [x] linux/amd64
+  - [x] linux/arm64
+  - [x] darwin/amd64
+  - [x] darwin/arm64 (Apple Silicon)
 - [ ] Distribution packages
   - [ ] Homebrew tap (macOS/Linux)
   - [ ] .deb package (Debian/Ubuntu)
   - [ ] .rpm package (Fedora/RHEL)
   - [ ] AUR package (Arch Linux)
-- [ ] Curl install script (one-liner installation)
-- [ ] GitHub Releases with pre-built binaries
+- [x] Curl install script (one-liner installation)
+- [x] GitHub Releases with pre-built binaries
 
 ## Tier 2: MVP Gaps
 

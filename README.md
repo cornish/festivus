@@ -29,6 +29,14 @@
 
 ## Installation
 
+### Quick Install (Linux/macOS)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cornish/textivus-editor/main/install.sh | sh
+```
+
+Or download manually from [GitHub Releases](https://github.com/cornish/textivus-editor/releases).
+
 ### From Source
 
 Requires Go 1.21 or later.
