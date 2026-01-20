@@ -7,7 +7,13 @@ set -e
 
 REPO="cornish/textivus-editor"
 BINARY_NAME="textivus"
-DEFAULT_BIN_DIR="$HOME/.local/bin"
+
+# Default install location: /usr/local/bin for root, ~/.local/bin for users
+if [ "$(id -u)" = "0" ]; then
+    DEFAULT_BIN_DIR="/usr/local/bin"
+else
+    DEFAULT_BIN_DIR="$HOME/.local/bin"
+fi
 
 # Colors (disabled if not a terminal)
 if [ -t 1 ]; then
