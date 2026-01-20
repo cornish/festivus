@@ -40,7 +40,7 @@ func main() {
 	config.InitCapabilities()
 
 	// Load configuration
-	cfg, _ := config.Load() // Ignore error, defaults are fine
+	cfg, configErr := config.Load()
 
 	// Command-line --ascii overrides config
 	if asciiMode {
@@ -50,6 +50,13 @@ func main() {
 
 	// Create editor with config
 	e := editor.NewWithConfig(cfg)
+
+	// If config had parse errors, show error dialog on startup
+	if configErr != nil {
+		if loadErr, ok := configErr.(*config.ConfigLoadError); ok {
+			e.SetConfigError(loadErr.FilePath, loadErr.Err.Error())
+		}
+	}
 
 	// Load file if provided
 	if filename != "" {

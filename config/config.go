@@ -131,8 +131,19 @@ func ThemesDir() (string, error) {
 	return filepath.Join(configDir, "festivus", "themes"), nil
 }
 
+// ConfigLoadError holds details about a config loading error
+type ConfigLoadError struct {
+	FilePath string
+	Err      error
+}
+
+func (e *ConfigLoadError) Error() string {
+	return e.Err.Error()
+}
+
 // Load reads the configuration from disk
 // Returns default config if file doesn't exist
+// Returns ConfigLoadError if file exists but has parse errors
 func Load() (*Config, error) {
 	cfg := DefaultConfig()
 
@@ -148,7 +159,7 @@ func Load() (*Config, error) {
 
 	// Parse the config file
 	if _, err := toml.DecodeFile(path, cfg); err != nil {
-		return cfg, err // Return defaults but also the error
+		return cfg, &ConfigLoadError{FilePath: path, Err: err}
 	}
 
 	return cfg, nil

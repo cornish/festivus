@@ -611,6 +611,49 @@ func (e *Editor) overlayRecentDirsDialog(viewportContent string) string {
 	return db.Overlay(viewportContent, e.width, e.viewport.Height())
 }
 
+// overlayConfigErrorDialog overlays the config error dialog
+func (e *Editor) overlayConfigErrorDialog(viewportContent string) string {
+	boxWidth := 56
+	db := e.NewDialogBuilder(boxWidth)
+
+	db.AddTitleBorder(" Config Error ")
+	db.AddEmptyLine()
+
+	// Error message - truncate if needed
+	errLine := "Error: " + e.configErrorMsg
+	if runewidth.StringWidth(errLine) > db.InnerWidth() {
+		errLine = runewidth.Truncate(errLine, db.InnerWidth(), "...")
+	}
+	db.AddText(errLine)
+
+	// File path
+	fileLine := "File: " + formatRecentPath(e.configErrorFile, db.InnerWidth()-6)
+	db.AddText(fileLine)
+
+	db.AddEmptyLine()
+
+	// Button row with selection highlighting
+	buttons := []string{"[ Edit File ]", "[ Use Defaults ]", "[ Quit ]"}
+	var buttonRow strings.Builder
+	for i, btn := range buttons {
+		if i > 0 {
+			buttonRow.WriteString("  ")
+		}
+		if i == e.configErrorChoice {
+			buttonRow.WriteString(db.themeUI.selectedStyle)
+			buttonRow.WriteString(btn)
+			buttonRow.WriteString(db.themeUI.dialogResetStyle)
+		} else {
+			buttonRow.WriteString(btn)
+		}
+	}
+	db.AddCenteredText(buttonRow.String())
+
+	db.AddBottomBorder()
+
+	return db.Overlay(viewportContent, e.width, e.viewport.Height())
+}
+
 // overlayKeybindingsDialog overlays the keybindings configuration dialog
 func (e *Editor) overlayKeybindingsDialog(viewportContent string) string {
 	boxWidth := 64

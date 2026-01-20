@@ -34,6 +34,7 @@ const (
 	ModeRecentFiles
 	ModeRecentDirs
 	ModeKeybindings
+	ModeConfigError
 )
 
 // FileEntry represents a file or directory in the file browser
@@ -260,6 +261,11 @@ type Editor struct {
 	kbDialogMessage   string // Message to show in dialog (errors, etc.)
 	kbDialogMsgError  bool   // true = message is an error (show in red)
 	kbDialogConfirm   bool   // true = waiting for y/n confirmation
+
+	// Config error dialog state
+	configErrorFile    string // Path to malformed config file
+	configErrorMsg     string // Error message from parser
+	configErrorChoice  int    // 0=Edit, 1=Defaults, 2=Quit
 }
 
 // activeDoc returns the currently active document
@@ -885,6 +891,9 @@ func (e *Editor) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if e.mode == ModeKeybindings {
 			return e.handleKeybindingsMouse(msg)
 		}
+		if e.mode == ModeConfigError {
+			return e.handleConfigErrorMouse(msg)
+		}
 		if e.mode == ModeHelp {
 			return e.handleHelpMouse(msg)
 		}
@@ -959,6 +968,11 @@ func (e *Editor) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if e.mode == ModeAbout {
 		e.mode = ModeNormal
 		return e, nil
+	}
+
+	// Handle config error mode
+	if e.mode == ModeConfigError {
+		return e.handleConfigErrorKey(msg)
 	}
 
 	// Handle theme selection mode
@@ -2373,6 +2387,107 @@ func (e *Editor) handleRecentDirsMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	return e, nil
 }
 
+// handleConfigErrorKey handles key events in the config error dialog
+func (e *Editor) handleConfigErrorKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyLeft:
+		if e.configErrorChoice > 0 {
+			e.configErrorChoice--
+		}
+	case tea.KeyRight:
+		if e.configErrorChoice < 2 {
+			e.configErrorChoice++
+		}
+	case tea.KeyEnter:
+		return e.executeConfigErrorChoice()
+	case tea.KeyEsc:
+		// Escape = Use Defaults
+		e.configErrorChoice = 1
+		return e.executeConfigErrorChoice()
+	case tea.KeyRunes:
+		// Hotkeys: E=Edit, D=Defaults, Q=Quit
+		switch string(msg.Runes) {
+		case "e", "E":
+			e.configErrorChoice = 0
+			return e.executeConfigErrorChoice()
+		case "d", "D":
+			e.configErrorChoice = 1
+			return e.executeConfigErrorChoice()
+		case "q", "Q":
+			e.configErrorChoice = 2
+			return e.executeConfigErrorChoice()
+		}
+	}
+	return e, nil
+}
+
+// executeConfigErrorChoice executes the selected config error action
+func (e *Editor) executeConfigErrorChoice() (tea.Model, tea.Cmd) {
+	switch e.configErrorChoice {
+	case 0: // Edit File
+		e.mode = ModeNormal
+		if err := e.LoadFile(e.configErrorFile); err != nil {
+			e.statusbar.SetMessage("Could not open config: "+err.Error(), "error")
+		} else {
+			e.statusbar.SetMessage("Edit config file, then restart Festivus", "info")
+		}
+	case 1: // Use Defaults
+		e.mode = ModeNormal
+		e.statusbar.SetMessage("Using default settings", "info")
+	case 2: // Quit
+		return e, tea.Quit
+	}
+	return e, nil
+}
+
+// handleConfigErrorMouse handles mouse input in the config error dialog
+func (e *Editor) handleConfigErrorMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	// Dialog dimensions (must match overlayConfigErrorDialog)
+	boxWidth := 56
+	boxHeight := 9
+
+	startX := (e.width - boxWidth) / 2
+	startY := (e.viewport.Height() - boxHeight) / 2
+
+	// Adjust mouse Y for menu bar
+	mouseY := msg.Y - 1
+
+	// Calculate relative position within dialog
+	relX := msg.X - startX
+	relY := mouseY - startY
+
+	// Check if click is outside dialog - treat as "Use Defaults"
+	if relX < 0 || relX >= boxWidth || relY < 0 || relY >= boxHeight {
+		if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress {
+			e.configErrorChoice = 1
+			return e.executeConfigErrorChoice()
+		}
+		return e, nil
+	}
+
+	// Button row is at line 7 (0-indexed)
+	buttonRowY := 7
+	if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress {
+		if relY == buttonRowY {
+			// Buttons: [ Edit File ]  [ Use Defaults ]  [ Quit ]
+			// Approximate positions within inner width (54)
+			innerX := relX - 1 // Account for border
+			if innerX >= 2 && innerX < 15 {
+				e.configErrorChoice = 0
+				return e.executeConfigErrorChoice()
+			} else if innerX >= 17 && innerX < 34 {
+				e.configErrorChoice = 1
+				return e.executeConfigErrorChoice()
+			} else if innerX >= 36 && innerX < 46 {
+				e.configErrorChoice = 2
+				return e.executeConfigErrorChoice()
+			}
+		}
+	}
+
+	return e, nil
+}
+
 // showKeybindingsDialog opens the keybindings configuration dialog
 func (e *Editor) showKeybindingsDialog() {
 	e.kbDialogIndex = 0
@@ -3615,6 +3730,11 @@ func (e *Editor) View() string {
 		viewportContent = e.overlayKeybindingsDialog(viewportContent)
 	}
 
+	// If config error dialog is open, overlay it centered on the viewport
+	if e.mode == ModeConfigError {
+		viewportContent = e.overlayConfigErrorDialog(viewportContent)
+	}
+
 	sb.WriteString(viewportContent)
 	sb.WriteString("\n")
 
@@ -3718,5 +3838,13 @@ func (e *Editor) SetFilename(filename string) {
 	}
 	e.activeDoc().filename = absPath
 	e.activeDoc().highlighter.SetFile(absPath) // Update syntax highlighter
+}
+
+// SetConfigError sets the config error state and shows the error dialog
+func (e *Editor) SetConfigError(filePath, errMsg string) {
+	e.configErrorFile = filePath
+	e.configErrorMsg = errMsg
+	e.configErrorChoice = 1 // Default to "Use Defaults"
+	e.mode = ModeConfigError
 }
 
