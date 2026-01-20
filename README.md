@@ -1,4 +1,7 @@
 # Textivus
+[![Release](https://img.shields.io/github/v/release/cornish/textivus-editor?display_name=tag&sort=semver)](https://github.com/cornish/textivus-editor/releases)
+[![CI](https://github.com/cornish/textivus-editor/actions/workflows/ci.yml/badge.svg)](https://github.com/cornish/textivus-editor/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 **Textivus** is a fast, friendly **terminal (TUI) text editor for Linux** (and macOS) inspired by the simplicity of **nano/micro** and the familiarity of **DOS EDIT** — with modern comforts like multi-file buffers, incremental find/replace, and syntax highlighting.
 
