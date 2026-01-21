@@ -7,6 +7,31 @@ import (
 
 // MinimapRenderer renders a braille-based minimap of the document.
 // Standard width is 8 (1 viewport indicator + 6 braille chars + 1 space).
+//
+// === MINIMAP SPECIFICATION (TODO: implement) ===
+//
+// Vertical mapping:
+//   - 1 braille dot row = 1 visual line (respects word wrap)
+//   - Each braille character = 4 visual lines (braille has 4 dot rows)
+//   - Minimap height = ceil(total visual lines / 4)
+//   - Minimap may be shorter or taller than viewport - not scaled to fit
+//
+// Horizontal mapping:
+//   - 1 braille dot column = 5 source characters
+//   - Each braille character = 10 source characters (2 dot columns × 5 chars)
+//   - 6 braille characters = 60 source characters max
+//   - Lines longer than 60 chars are truncated (not scaled)
+//
+// Fill logic:
+//   - A dot is ON if there are >= 3 non-whitespace characters in that
+//     5-character span (i.e., less than 2 char widths of whitespace)
+//
+// Viewport indicator:
+//   - Option A: Current vertical bar │ on left side
+//   - Option B: Reverse video on braille chars within viewport range
+//
+// Mouse interaction:
+//   - Clicking on minimap navigates viewport to that location
 type MinimapRenderer struct {
 	styles  Styles
 	enabled bool
