@@ -1,19 +1,21 @@
 #!/bin/sh
 # Textivus installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/cornish/textivus-editor/main/install.sh | sh
-#    or: sh install.sh [--version v0.1.0] [--bin-dir ~/.local/bin]
+#
+# User install (default):
+#   curl -fsSL https://raw.githubusercontent.com/cornish/textivus-editor/main/install.sh | sh
+#
+# System-wide install:
+#   curl -fsSL https://raw.githubusercontent.com/cornish/textivus-editor/main/install.sh | sh -s -- --bin-dir /usr/local/bin
+#
+# Options:
+#   --version VERSION    Install specific version (default: latest)
+#   --bin-dir DIR        Installation directory (default: ~/.local/bin)
 
 set -e
 
 REPO="cornish/textivus-editor"
 BINARY_NAME="textivus"
-
-# Default install location: /usr/local/bin for root, ~/.local/bin for users
-if [ "$(id -u)" = "0" ]; then
-    DEFAULT_BIN_DIR="/usr/local/bin"
-else
-    DEFAULT_BIN_DIR="$HOME/.local/bin"
-fi
+DEFAULT_BIN_DIR="$HOME/.local/bin"
 
 # Colors (disabled if not a terminal)
 if [ -t 1 ]; then
