@@ -5,7 +5,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/cornish/textivus-editor/main/install.sh | sh
 #
 # System-wide install:
-#   curl -fsSL https://raw.githubusercontent.com/cornish/textivus-editor/main/install.sh | sh -s -- --bin-dir /usr/local/bin
+#   curl -fsSL https://raw.githubusercontent.com/cornish/textivus-editor/main/install.sh | sudo sh -s -- --bin-dir /usr/local/bin
 #
 # Options:
 #   --version VERSION    Install specific version (default: latest)
