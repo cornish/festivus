@@ -158,6 +158,38 @@ func (s *Scrollbar) Render(viewportStart, viewportHeight, totalLines int) []stri
 	return result
 }
 
+// ScrollbarColumnAdapter wraps Scrollbar to implement ColumnRenderer.
+type ScrollbarColumnAdapter struct {
+	scrollbar *Scrollbar
+}
+
+// NewScrollbarColumnAdapter creates an adapter for the scrollbar.
+func NewScrollbarColumnAdapter(sb *Scrollbar) *ScrollbarColumnAdapter {
+	return &ScrollbarColumnAdapter{scrollbar: sb}
+}
+
+// Render implements ColumnRenderer interface.
+func (a *ScrollbarColumnAdapter) Render(width, height int, state *RenderState) []string {
+	if !a.scrollbar.enabled || width <= 0 || height <= 0 {
+		rows := make([]string, height)
+		for i := range rows {
+			rows[i] = ""
+		}
+		return rows
+	}
+
+	// Ensure scrollbar height matches
+	a.scrollbar.SetHeight(height)
+
+	// Use visual lines if word wrap, otherwise buffer lines
+	totalLines := state.TotalLines
+	if state.WordWrap && state.TotalVisualLines > 0 {
+		totalLines = state.TotalVisualLines
+	}
+
+	return a.scrollbar.Render(state.ScrollY, height, totalLines)
+}
+
 // RowToLine converts a scrollbar row to the corresponding visual line index
 // This is consistent with the thumb position calculation in Render
 func (s *Scrollbar) RowToLine(row int, totalLines, viewportHeight int) int {

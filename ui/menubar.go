@@ -41,6 +41,7 @@ const (
 	ActionLineNumbers
 	ActionSyntaxHighlight
 	ActionScrollbar   // Toggle scrollbar
+	ActionMinimap     // Toggle minimap
 	ActionTheme       // Opens theme selection dialog
 	ActionKeybindings // Opens keybindings dialog
 	ActionSettings    // Opens settings dialog
@@ -148,6 +149,7 @@ func NewMenuBar(styles Styles) *MenuBar {
 					{Label: "[ ] Line Numbers", Shortcut: "Ctrl+L", HotKey: 'L', Action: ActionLineNumbers},
 					{Label: "[x] Syntax Highlight", Shortcut: "", HotKey: 'S', Action: ActionSyntaxHighlight},
 					{Label: "[ ] Scrollbar", Shortcut: "", HotKey: 'B', Action: ActionScrollbar},
+					{Label: "[ ] Minimap", Shortcut: "", HotKey: 'M', Action: ActionMinimap},
 					{Label: "Theme...", Shortcut: "", HotKey: 'T', Action: ActionTheme},
 					{Label: "Keybindings...", Shortcut: "", HotKey: 'K', Action: ActionKeybindings},
 					{Label: "Settings...", Shortcut: "", HotKey: 'G', Action: ActionSettings},

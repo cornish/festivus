@@ -1,0 +1,349 @@
+package ui
+
+import (
+	"strings"
+	"unicode/utf8"
+
+	"github.com/cornish/textivus-editor/syntax"
+	"github.com/mattn/go-runewidth"
+)
+
+// TextRenderer renders the main text content column.
+// This is the flexible column that displays document content with
+// syntax highlighting, cursor, and selection.
+type TextRenderer struct {
+	styles Styles
+}
+
+// NewTextRenderer creates a new text renderer.
+func NewTextRenderer(styles Styles) *TextRenderer {
+	return &TextRenderer{styles: styles}
+}
+
+// SetStyles updates the styles for runtime theme changes.
+func (r *TextRenderer) SetStyles(styles Styles) {
+	r.styles = styles
+}
+
+// Render implements ColumnRenderer.
+// Renders document text with syntax highlighting, cursor, and selection.
+func (r *TextRenderer) Render(width, height int, state *RenderState) []string {
+	if width <= 0 || height <= 0 || state == nil {
+		rows := make([]string, height)
+		for i := range rows {
+			rows[i] = strings.Repeat(" ", width)
+		}
+		return rows
+	}
+
+	if state.WordWrap {
+		return r.renderWrapped(width, height, state)
+	}
+	return r.renderNoWrap(width, height, state)
+}
+
+// renderNoWrap renders without word wrap.
+func (r *TextRenderer) renderNoWrap(width, height int, state *RenderState) []string {
+	rows := make([]string, height)
+
+	endLine := state.ScrollY + height
+	if endLine > len(state.Lines) {
+		endLine = len(state.Lines)
+	}
+
+	for row := 0; row < height; row++ {
+		lineIdx := state.ScrollY + row
+
+		if lineIdx < len(state.Lines) {
+			line := state.Lines[lineIdx]
+
+			// Get syntax colors for this line
+			var colors []syntax.ColorSpan
+			if state.LineColors != nil {
+				colors = state.LineColors[lineIdx]
+			}
+
+			// Render line content with selection and cursor
+			rows[row] = r.renderLineContent(line, lineIdx, width, state, colors)
+		} else {
+			// Past end of file - render empty line marker
+			rows[row] = r.renderEmptyLine(width)
+		}
+	}
+
+	return rows
+}
+
+// renderWrapped renders with word wrap enabled.
+func (r *TextRenderer) renderWrapped(width, height int, state *RenderState) []string {
+	rows := make([]string, height)
+	visualLineCount := 0
+
+	// Skip lines until we reach scrollY visual lines
+	logicalLine := 0
+	visualLinesSkipped := 0
+	startOffset := 0
+
+	if state.ScrollY > 0 {
+		for logicalLine < len(state.Lines) && visualLinesSkipped < state.ScrollY {
+			line := state.Lines[logicalLine]
+			wrappedCount := countWrappedLinesLocal(line, width)
+			if visualLinesSkipped+wrappedCount > state.ScrollY {
+				break
+			}
+			visualLinesSkipped += wrappedCount
+			logicalLine++
+		}
+		startOffset = state.ScrollY - visualLinesSkipped
+	}
+
+	// Render visible lines
+	for visualLineCount < height && logicalLine < len(state.Lines) {
+		line := state.Lines[logicalLine]
+		sel := state.Selection[logicalLine]
+		wrappedLines := wrapLineLocal(line, width)
+
+		var colors []syntax.ColorSpan
+		if state.LineColors != nil {
+			colors = state.LineColors[logicalLine]
+		}
+
+		for wrapIdx := 0; wrapIdx < len(wrappedLines) && visualLineCount < height; wrapIdx++ {
+			if logicalLine == 0 || visualLinesSkipped < state.ScrollY {
+				if wrapIdx < startOffset {
+					continue
+				}
+			}
+
+			segmentStartCol := wrapIdx * width
+			rows[visualLineCount] = r.renderWrappedSegment(
+				wrappedLines[wrapIdx], logicalLine, segmentStartCol,
+				state.CursorLine, state.CursorCol, sel, width, colors,
+			)
+			visualLineCount++
+		}
+
+		logicalLine++
+		startOffset = 0
+	}
+
+	// Fill remaining lines with empty markers
+	for visualLineCount < height {
+		rows[visualLineCount] = r.renderEmptyLine(width)
+		visualLineCount++
+	}
+
+	return rows
+}
+
+// renderLineContent renders a single line's content with selection and cursor (no wrap).
+func (r *TextRenderer) renderLineContent(line string, lineIdx, width int, state *RenderState, colors []syntax.ColorSpan) string {
+	runes := []rune(line)
+	var sb strings.Builder
+
+	// Get ANSI codes for cursor and selection
+	ui := r.styles.Theme.UI
+	cursorCode := "\033[7m" // Reverse video for cursor
+	selectionBg := ColorToANSIBg(ui.SelectionBg)
+	selectionFg := ColorToANSIFg(ui.SelectionFg)
+	resetCode := "\033[0m"
+
+	// Apply horizontal scroll
+	visibleStart := state.ScrollX
+	visualCol := 0
+	runeIdx := 0
+
+	// Skip to scroll position
+	for runeIdx < len(runes) && visualCol < visibleStart {
+		ru := runes[runeIdx]
+		if ru == '\t' {
+			visualCol += 4
+		} else {
+			visualCol += runewidth.RuneWidth(ru)
+		}
+		runeIdx++
+	}
+
+	// Get selection range for this line
+	sel, hasSelection := state.Selection[lineIdx]
+
+	// Render visible portion
+	outputCol := 0
+	for runeIdx < len(runes) && outputCol < width {
+		ru := runes[runeIdx]
+		rw := runewidth.RuneWidth(ru)
+
+		char := string(ru)
+		if ru == '\t' {
+			char = "    " // Render tab as 4 spaces
+			rw = 4
+		}
+
+		if outputCol+rw > width {
+			break
+		}
+
+		isCursor := lineIdx == state.CursorLine && runeIdx == state.CursorCol
+		isSelected := hasSelection && runeIdx >= sel.Start && (sel.End == -1 || runeIdx < sel.End)
+
+		if isCursor {
+			sb.WriteString(cursorCode)
+			sb.WriteString(char)
+			sb.WriteString(resetCode)
+		} else if isSelected {
+			sb.WriteString(selectionBg)
+			sb.WriteString(selectionFg)
+			sb.WriteString(char)
+			sb.WriteString(resetCode)
+		} else {
+			syntaxColor := syntax.ColorAt(colors, runeIdx)
+			if syntaxColor != "" {
+				sb.WriteString(syntaxColor)
+				sb.WriteString(char)
+				sb.WriteString(resetCode)
+			} else {
+				sb.WriteString(char)
+			}
+		}
+
+		visualCol += rw
+		outputCol += rw
+		runeIdx++
+	}
+
+	// Render cursor at end of line if needed
+	if lineIdx == state.CursorLine && runeIdx == state.CursorCol {
+		sb.WriteString(cursorCode)
+		sb.WriteString(" ")
+		sb.WriteString(resetCode)
+		outputCol++
+	} else if hasSelection && runeIdx >= sel.Start && (sel.End == -1 || runeIdx < sel.End) {
+		sb.WriteString(selectionBg)
+		sb.WriteString(selectionFg)
+		sb.WriteString(" ")
+		sb.WriteString(resetCode)
+		outputCol++
+	}
+
+	// Pad to full width
+	if outputCol < width {
+		padding := width - outputCol
+		sb.WriteString(strings.Repeat(" ", padding))
+	}
+
+	return sb.String()
+}
+
+// renderWrappedSegment renders a single wrapped segment of a line.
+func (r *TextRenderer) renderWrappedSegment(segment string, lineIdx, segmentStartCol, cursorLine, cursorCol int, sel SelectionRange, width int, colors []syntax.ColorSpan) string {
+	var sb strings.Builder
+	runes := []rune(segment)
+
+	// Get ANSI codes for cursor and selection
+	ui := r.styles.Theme.UI
+	cursorCode := "\033[7m" // Reverse video for cursor
+	selectionBg := ColorToANSIBg(ui.SelectionBg)
+	selectionFg := ColorToANSIFg(ui.SelectionFg)
+	resetCode := "\033[0m"
+
+	outputCol := 0
+	for i, ru := range runes {
+		col := segmentStartCol + i
+		isCursor := lineIdx == cursorLine && col == cursorCol
+		isSelected := sel.Start <= col && (sel.End == -1 || col < sel.End)
+
+		char := string(ru)
+		charWidth := runewidth.RuneWidth(ru)
+		if ru == '\t' {
+			char = "    "
+			charWidth = 4
+		}
+
+		if isCursor {
+			sb.WriteString(cursorCode)
+			sb.WriteString(char)
+			sb.WriteString(resetCode)
+		} else if isSelected {
+			sb.WriteString(selectionBg)
+			sb.WriteString(selectionFg)
+			sb.WriteString(char)
+			sb.WriteString(resetCode)
+		} else {
+			syntaxColor := syntax.ColorAt(colors, col)
+			if syntaxColor != "" {
+				sb.WriteString(syntaxColor)
+				sb.WriteString(char)
+				sb.WriteString(resetCode)
+			} else {
+				sb.WriteString(char)
+			}
+		}
+		outputCol += charWidth
+	}
+
+	// Cursor at end of segment
+	segmentEndCol := segmentStartCol + len(runes)
+	if lineIdx == cursorLine && cursorCol == segmentEndCol && segmentEndCol%width == 0 && len(runes) == width {
+		// Cursor is at wrap point, don't show here
+	} else if lineIdx == cursorLine && cursorCol >= segmentStartCol && cursorCol <= segmentEndCol && outputCol < width {
+		if cursorCol == segmentEndCol {
+			sb.WriteString(cursorCode)
+			sb.WriteString(" ")
+			sb.WriteString(resetCode)
+			outputCol++
+		}
+	}
+
+	// Pad to full width
+	if outputCol < width {
+		sb.WriteString(strings.Repeat(" ", width-outputCol))
+	}
+
+	return sb.String()
+}
+
+// renderEmptyLine renders an empty line marker (~).
+func (r *TextRenderer) renderEmptyLine(width int) string {
+	var sb strings.Builder
+	// Use dim gray for empty line marker
+	sb.WriteString("\033[90m") // Dim gray
+	sb.WriteString("~")
+	sb.WriteString("\033[0m")
+	if width > 1 {
+		sb.WriteString(strings.Repeat(" ", width-1))
+	}
+	return sb.String()
+}
+
+// Helper functions (local copies to avoid dependency issues)
+
+func countWrappedLinesLocal(line string, width int) int {
+	if width <= 0 {
+		return 1
+	}
+	lineLen := utf8.RuneCountInString(line)
+	if lineLen == 0 {
+		return 1
+	}
+	return (lineLen + width - 1) / width
+}
+
+func wrapLineLocal(line string, width int) []string {
+	if width <= 0 {
+		return []string{line}
+	}
+	runes := []rune(line)
+	if len(runes) == 0 {
+		return []string{""}
+	}
+
+	var segments []string
+	for i := 0; i < len(runes); i += width {
+		end := i + width
+		if end > len(runes) {
+			end = len(runes)
+		}
+		segments = append(segments, string(runes[i:end]))
+	}
+	return segments
+}

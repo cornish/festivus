@@ -309,6 +309,7 @@ type EditorConfig struct {
 	AsciiMode       *bool `toml:"ascii_mode"`     // nil = auto-detect, true/false = override
 	BackupCount     int   `toml:"backup_count"`   // 0=disabled, 1=filename~, >1=filename~1~ through filename~N~
 	Scrollbar       bool  `toml:"scrollbar"`      // Show scrollbar
+	Minimap         bool  `toml:"minimap"`        // Show minimap
 	MaxBuffers      int   `toml:"max_buffers"`    // Maximum open buffers (0=unlimited, default 20)
 	TabWidth        int   `toml:"tab_width"`      // Display width of tabs (default 4)
 	TabsToSpaces    bool  `toml:"tabs_to_spaces"` // Insert spaces instead of tab characters

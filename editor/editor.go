@@ -200,6 +200,13 @@ type Editor struct {
 	styles    ui.Styles
 	box       BoxChars // Characters for drawing dialog boxes
 
+	// Column-based rendering
+	compositor       *ui.Compositor
+	lineNumRenderer  *ui.LineNumberRenderer
+	textRenderer     *ui.TextRenderer
+	minimapRenderer  *ui.MinimapRenderer
+	scrollbarAdapter *ui.ScrollbarColumnAdapter
+
 	// State
 	mode   Mode
 	width  int
@@ -547,6 +554,8 @@ func NewWithConfig(cfg *config.Config) *Editor {
 		encoding:    enc.GetEncodingByID("utf-8"), // Default to UTF-8
 	}
 
+	scrollbar := ui.NewScrollbar(styles)
+
 	e := &Editor{
 		documents:   []*Document{doc},
 		activeIdx:   0,
@@ -554,7 +563,7 @@ func NewWithConfig(cfg *config.Config) *Editor {
 		menubar:     ui.NewMenuBar(styles),
 		statusbar:   ui.NewStatusBar(styles),
 		viewport:    ui.NewViewport(styles),
-		scrollbar:   ui.NewScrollbar(styles),
+		scrollbar:   scrollbar,
 		styles:      styles,
 		box:         box,
 		mode:        ModeNormal,
@@ -562,7 +571,15 @@ func NewWithConfig(cfg *config.Config) *Editor {
 		height:      24,
 		config:      cfg,
 		keybindings: config.LoadKeybindings(),
+		// Initialize column renderers
+		lineNumRenderer:  ui.NewLineNumberRenderer(styles),
+		textRenderer:     ui.NewTextRenderer(styles),
+		minimapRenderer:  ui.NewMinimapRenderer(styles),
+		scrollbarAdapter: ui.NewScrollbarColumnAdapter(scrollbar),
 	}
+
+	// Initialize compositor with default dimensions
+	e.compositor = ui.NewCompositor(80, 22) // Will be resized on first render
 
 	// Apply config settings
 	if cfg != nil {
@@ -598,6 +615,12 @@ func NewWithConfig(cfg *config.Config) *Editor {
 		// Update viewport to account for scrollbar width
 		e.viewport.SetScrollbarWidth(e.scrollbar.Width())
 
+		// Apply minimap setting
+		if cfg.Editor.Minimap {
+			e.minimapRenderer.SetEnabled(true)
+			e.menubar.SetItemLabel(ui.ActionMinimap, "[x] Minimap")
+		}
+
 		// Apply theme syntax colors
 		e.activeDoc().highlighter.SetColors(syntax.SyntaxColors{
 			Keyword:  theme.Syntax.Keyword,
@@ -610,6 +633,9 @@ func NewWithConfig(cfg *config.Config) *Editor {
 			Error:    theme.UI.ErrorFg,
 		})
 	}
+
+	// Setup compositor columns AFTER config is applied
+	e.setupCompositorColumns()
 
 	return e
 }
@@ -994,6 +1020,41 @@ func (e *Editor) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return e, nil
 }
 
+// setupCompositorColumns configures the compositor columns based on current settings.
+func (e *Editor) setupCompositorColumns() {
+	columns := []ui.Column{
+		// Line numbers (fixed width 5)
+		{
+			Width:    5,
+			Flexible: false,
+			Enabled:  e.viewport.ShowLineNum(),
+			Renderer: e.lineNumRenderer,
+		},
+		// Text content (flexible)
+		{
+			Width:    0,
+			Flexible: true,
+			Enabled:  true,
+			Renderer: e.textRenderer,
+		},
+		// Minimap (fixed width 8)
+		{
+			Width:    ui.MinimapWidth(),
+			Flexible: false,
+			Enabled:  e.minimapRenderer.IsEnabled(),
+			Renderer: e.minimapRenderer,
+		},
+		// Scrollbar (fixed width 1)
+		{
+			Width:    1,
+			Flexible: false,
+			Enabled:  e.scrollbar.IsEnabled(),
+			Renderer: e.scrollbarAdapter,
+		},
+	}
+	e.compositor.SetColumns(columns)
+}
+
 // updateViewportSize recalculates the viewport size based on current state
 func (e *Editor) updateViewportSize() {
 	// Viewport height = total height - menu bar (1) - status bar (1)
@@ -1022,6 +1083,69 @@ func (e *Editor) updateViewportSize() {
 
 	e.viewport.SetSize(e.width, viewportHeight)
 	e.scrollbar.SetHeight(viewportHeight)
+	e.compositor.SetSize(e.width, viewportHeight)
+}
+
+// buildRenderState creates a RenderState for the compositor from current editor state.
+func (e *Editor) buildRenderState() *ui.RenderState {
+	lines := e.activeDoc().buffer.Lines()
+
+	// Build selection map
+	selectionMap := make(map[int]ui.SelectionRange)
+	if e.activeDoc().selection.Active && !e.activeDoc().selection.IsEmpty() {
+		start, end := e.activeDoc().selection.Normalize()
+		startLine, startCol := e.activeDoc().buffer.PositionToLineCol(start)
+		endLine, endCol := e.activeDoc().buffer.PositionToLineCol(end)
+
+		for line := startLine; line <= endLine; line++ {
+			sr := ui.SelectionRange{Start: 0, End: -1}
+			if line == startLine {
+				sr.Start = startCol
+			}
+			if line == endLine {
+				sr.End = endCol
+			}
+			selectionMap[line] = sr
+		}
+	}
+
+	// Generate syntax highlighting colors for visible lines
+	var lineColors map[int][]syntax.ColorSpan
+	if e.activeDoc().highlighter.Enabled() && e.activeDoc().highlighter.HasLexer() {
+		lineColors = make(map[int][]syntax.ColorSpan)
+		startLine := e.viewport.ScrollY()
+		endLine := startLine + e.viewport.Height()
+		if endLine > len(lines) {
+			endLine = len(lines)
+		}
+		for i := startLine; i < endLine; i++ {
+			colors := e.activeDoc().highlighter.GetLineColors(lines[i])
+			if len(colors) > 0 {
+				lineColors[i] = colors
+			}
+		}
+	}
+
+	// Calculate total visual lines
+	totalVisualLines := len(lines)
+	if e.viewport.WordWrap() {
+		totalVisualLines = e.viewport.CountVisualLines(lines)
+	}
+
+	return &ui.RenderState{
+		Lines:            lines,
+		CursorLine:       e.activeDoc().cursor.Line(),
+		CursorCol:        e.activeDoc().cursor.Col(),
+		ScrollY:          e.viewport.ScrollY(),
+		ScrollX:          e.viewport.ScrollX(),
+		Selection:        selectionMap,
+		LineColors:       lineColors,
+		WordWrap:         e.viewport.WordWrap(),
+		TabWidth:         4,
+		TotalLines:       len(lines),
+		TotalVisualLines: totalVisualLines,
+		Styles:           e.styles,
+	}
 }
 
 // handleKey handles keyboard input
@@ -1893,6 +2017,8 @@ func (e *Editor) executeAction(action ui.MenuAction) (tea.Model, tea.Cmd) {
 		e.toggleSyntaxHighlight()
 	case ui.ActionScrollbar:
 		e.toggleScrollbar()
+	case ui.ActionMinimap:
+		e.toggleMinimap()
 	case ui.ActionTheme:
 		e.showThemeDialog()
 	case ui.ActionKeybindings:
@@ -1975,6 +2101,9 @@ func (e *Editor) toggleLineNumbers() {
 	show := !e.viewport.ShowLineNum()
 	e.viewport.ShowLineNumbers(show)
 
+	// Update compositor columns
+	e.setupCompositorColumns()
+
 	// Update menu checkbox
 	if show {
 		e.menubar.SetItemLabel(ui.ActionLineNumbers, "[x] Line Numbers")
@@ -2016,6 +2145,9 @@ func (e *Editor) toggleScrollbar() {
 	// Update viewport to account for scrollbar width change
 	e.viewport.SetScrollbarWidth(e.scrollbar.Width())
 
+	// Update compositor columns
+	e.setupCompositorColumns()
+
 	// Update menu checkbox
 	if enabled {
 		e.menubar.SetItemLabel(ui.ActionScrollbar, "[x] Scrollbar")
@@ -2023,6 +2155,29 @@ func (e *Editor) toggleScrollbar() {
 	} else {
 		e.menubar.SetItemLabel(ui.ActionScrollbar, "[ ] Scrollbar")
 		e.statusbar.SetMessage("Scrollbar disabled", "info")
+	}
+
+	// Ensure cursor stays visible after toggle (text width changes)
+	e.viewport.EnsureCursorVisibleWrapped(e.activeDoc().buffer.Lines(), e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col())
+
+	// Save to config
+	e.saveConfig()
+}
+
+// toggleMinimap toggles the minimap on/off
+func (e *Editor) toggleMinimap() {
+	enabled := e.minimapRenderer.Toggle()
+
+	// Update compositor columns
+	e.setupCompositorColumns()
+
+	// Update menu checkbox
+	if enabled {
+		e.menubar.SetItemLabel(ui.ActionMinimap, "[x] Minimap")
+		e.statusbar.SetMessage("Minimap enabled", "info")
+	} else {
+		e.menubar.SetItemLabel(ui.ActionMinimap, "[ ] Minimap")
+		e.statusbar.SetMessage("Minimap disabled", "info")
 	}
 
 	// Ensure cursor stays visible after toggle (text width changes)
@@ -2041,6 +2196,7 @@ func (e *Editor) saveConfig() {
 	e.config.Editor.LineNumbers = e.viewport.ShowLineNum()
 	e.config.Editor.SyntaxHighlight = e.activeDoc().highlighter.Enabled()
 	e.config.Editor.Scrollbar = e.scrollbar.IsEnabled()
+	e.config.Editor.Minimap = e.minimapRenderer.IsEnabled()
 	// Save in background - don't block the UI
 	go e.config.Save()
 }
@@ -2730,6 +2886,10 @@ func (e *Editor) saveSettings() {
 	e.viewport.ShowLineNumbers(e.settingsLineNumbers)
 	e.activeDoc().highlighter.SetEnabled(e.settingsSyntax)
 	e.scrollbar.SetEnabled(e.settingsScrollbar)
+	e.viewport.SetScrollbarWidth(e.scrollbar.Width())
+
+	// Update compositor columns to reflect changes
+	e.setupCompositorColumns()
 
 	// Update menu checkboxes to reflect new state
 	if e.settingsWordWrap {
@@ -4262,71 +4422,9 @@ func (e *Editor) View() string {
 	sb.WriteString(e.menubar.View())
 	sb.WriteString("\n")
 
-	// Build selection map for viewport
-	selectionMap := make(map[int]ui.SelectionRange)
-	if e.activeDoc().selection.Active && !e.activeDoc().selection.IsEmpty() {
-		start, end := e.activeDoc().selection.Normalize()
-		startLine, startCol := e.activeDoc().buffer.PositionToLineCol(start)
-		endLine, endCol := e.activeDoc().buffer.PositionToLineCol(end)
-
-		for line := startLine; line <= endLine; line++ {
-			sr := ui.SelectionRange{Start: 0, End: -1}
-			if line == startLine {
-				sr.Start = startCol
-			}
-			if line == endLine {
-				sr.End = endCol
-			}
-			selectionMap[line] = sr
-		}
-	}
-
-	// Editor viewport
-	lines := e.activeDoc().buffer.Lines()
-
-	// Generate syntax highlighting colors for visible lines
-	var lineColors map[int][]syntax.ColorSpan
-	if e.activeDoc().highlighter.Enabled() && e.activeDoc().highlighter.HasLexer() {
-		lineColors = make(map[int][]syntax.ColorSpan)
-		// Calculate visible line range
-		startLine := e.viewport.ScrollY()
-		endLine := startLine + e.viewport.Height()
-		if endLine > len(lines) {
-			endLine = len(lines)
-		}
-		for i := startLine; i < endLine; i++ {
-			colors := e.activeDoc().highlighter.GetLineColors(lines[i])
-			if len(colors) > 0 {
-				lineColors[i] = colors
-			}
-		}
-	}
-
-	viewportContent := e.viewport.Render(lines, e.activeDoc().cursor.Line(), e.activeDoc().cursor.Col(), selectionMap, lineColors)
-
-	// Append scrollbar to viewport lines if enabled
-	if e.scrollbar.IsEnabled() {
-		viewportStart := e.viewport.ScrollY()
-		viewportHeight := e.viewport.Height()
-
-		// Calculate total lines - use visual lines if word wrap is enabled
-		totalLines := len(lines)
-		if e.viewport.WordWrap() {
-			totalLines = e.viewport.CountVisualLines(lines)
-		}
-
-		scrollbarLines := e.scrollbar.Render(viewportStart, viewportHeight, totalLines)
-
-		if len(scrollbarLines) > 0 {
-			viewportLines := strings.Split(viewportContent, "\n")
-			for i, scrollbarLine := range scrollbarLines {
-				if i < len(viewportLines) {
-					viewportLines[i] = viewportLines[i] + scrollbarLine
-				}
-			}
-			viewportContent = strings.Join(viewportLines, "\n")
-		}
-	}
+	// Render editor content using compositor
+	renderState := e.buildRenderState()
+	viewportContent := e.compositor.Render(renderState)
 
 	// If menu dropdown is open, overlay it on top of the viewport
 	if e.menubar.IsOpen() {
