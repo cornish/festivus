@@ -182,7 +182,11 @@ func (r *MinimapRenderer) Render(width, height int, state *RenderState) []string
 		}
 
 		sb.WriteString(textColor)
-		braille := r.renderBrailleChar(fourLines, brailleWidth)
+		tabWidth := state.TabWidth
+		if tabWidth <= 0 {
+			tabWidth = 4
+		}
+		braille := r.renderBrailleChar(fourLines, brailleWidth, tabWidth)
 		sb.WriteString(braille)
 		sb.WriteString(resetCode)
 
@@ -226,17 +230,17 @@ func (r *MinimapRenderer) generateVisualLines(lines []string, wordWrap bool, tex
 }
 
 // renderBrailleChar renders braille characters for 4 visual lines.
-// Each braille char represents 4 rows × 2 columns, where each dot column = 5 source chars.
-// A dot is ON if >= 3 non-whitespace chars in that 5-char span.
-func (r *MinimapRenderer) renderBrailleChar(fourLines [4]string, brailleWidth int) string {
+// Each braille char represents 4 rows × 2 columns, where each dot column = 5 visual columns.
+// A dot is ON if >= 3 non-whitespace chars in that 5-column span.
+func (r *MinimapRenderer) renderBrailleChar(fourLines [4]string, brailleWidth, tabWidth int) string {
 	var result strings.Builder
 
-	// Each braille char = 10 source chars (2 dot columns × 5 chars each)
-	charsPerBraille := 10
+	// Each braille char = 10 visual columns (2 dot columns × 5 columns each)
+	colsPerBraille := 10
 
 	for col := 0; col < brailleWidth; col++ {
-		srcColStart := col * charsPerBraille
-		srcColMid := srcColStart + 5 // Split point between left and right dot columns
+		visualColStart := col * colsPerBraille
+		visualColMid := visualColStart + 5 // Split point between left and right dot columns
 
 		// Build braille pattern from the 4×2 grid
 		// Braille dots are numbered:
@@ -247,10 +251,10 @@ func (r *MinimapRenderer) renderBrailleChar(fourLines [4]string, brailleWidth in
 		var pattern rune = 0x2800 // Empty braille
 
 		for rowOffset := 0; rowOffset < 4; rowOffset++ {
-			lineRunes := []rune(fourLines[rowOffset])
+			line := fourLines[rowOffset]
 
-			// Left dot column (dots 1,2,3,7) - chars [srcColStart, srcColMid)
-			if hasEnoughContent(lineRunes, srcColStart, srcColMid, 3) {
+			// Left dot column (dots 1,2,3,7) - visual columns [visualColStart, visualColMid)
+			if hasEnoughContentVisual(line, visualColStart, visualColMid, 3, tabWidth) {
 				switch rowOffset {
 				case 0:
 					pattern |= 0x01 // dot 1
@@ -263,8 +267,8 @@ func (r *MinimapRenderer) renderBrailleChar(fourLines [4]string, brailleWidth in
 				}
 			}
 
-			// Right dot column (dots 4,5,6,8) - chars [srcColMid, srcColMid+5)
-			if hasEnoughContent(lineRunes, srcColMid, srcColMid+5, 3) {
+			// Right dot column (dots 4,5,6,8) - visual columns [visualColMid, visualColMid+5)
+			if hasEnoughContentVisual(line, visualColMid, visualColMid+5, 3, tabWidth) {
 				switch rowOffset {
 				case 0:
 					pattern |= 0x08 // dot 4
@@ -284,19 +288,36 @@ func (r *MinimapRenderer) renderBrailleChar(fourLines [4]string, brailleWidth in
 	return result.String()
 }
 
-// hasEnoughContent checks if a line has at least `threshold` non-whitespace characters
-// in the given column range [start, end).
-func hasEnoughContent(lineRunes []rune, start, end, threshold int) bool {
+// hasEnoughContentVisual checks if a line has at least `threshold` non-whitespace characters
+// in the given visual column range [start, end). Tabs are counted as tabWidth visual columns.
+func hasEnoughContentVisual(line string, start, end, threshold, tabWidth int) bool {
 	if start < 0 {
 		start = 0
 	}
-	if end > len(lineRunes) {
-		end = len(lineRunes)
+	if tabWidth <= 0 {
+		tabWidth = 4
 	}
+
 	count := 0
-	for i := start; i < end; i++ {
-		if i < len(lineRunes) {
-			r := lineRunes[i]
+	visualCol := 0
+
+	for _, r := range line {
+		if visualCol >= end {
+			break // Past the range we care about
+		}
+
+		var charWidth int
+		if r == '\t' {
+			// Tab advances to next multiple of tabWidth
+			charWidth = tabWidth - (visualCol % tabWidth)
+		} else {
+			charWidth = 1
+		}
+
+		// Check if this character overlaps with our range [start, end)
+		charEnd := visualCol + charWidth
+		if charEnd > start && visualCol < end {
+			// Character is at least partially in range
 			if r != ' ' && r != '\t' {
 				count++
 				if count >= threshold {
@@ -304,6 +325,8 @@ func hasEnoughContent(lineRunes []rune, start, end, threshold int) bool {
 				}
 			}
 		}
+
+		visualCol = charEnd
 	}
 	return false
 }
