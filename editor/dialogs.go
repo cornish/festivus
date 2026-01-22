@@ -45,9 +45,11 @@ func overlayLineAt(dropLine, viewportLine string, offset int) string {
 // sliceAnsiString extracts a substring from an ANSI-coded string based on visual positions.
 // start and end are visual column positions (0-indexed). Use end=-1 for "to the end".
 // ANSI escape codes are preserved and passed through correctly.
+// Wide characters that would be split are excluded and replaced with spaces to maintain exact width.
 func sliceAnsiString(s string, start, end int) string {
 	var result strings.Builder
 	visualPos := 0
+	outputWidth := 0
 	inEscape := false
 	var escapeSeq strings.Builder
 
@@ -66,13 +68,7 @@ func sliceAnsiString(s string, start, end int) string {
 				// Include escape sequences that appear within our range
 				// or at the boundary (to preserve color state)
 				if end == -1 || visualPos < end {
-					if visualPos >= start || visualPos == 0 {
-						result.WriteString(escapeSeq.String())
-					} else if visualPos < start {
-						// Escape sequence before our range - still include it
-						// to maintain proper color state
-						result.WriteString(escapeSeq.String())
-					}
+					result.WriteString(escapeSeq.String())
 				}
 			}
 			continue
@@ -80,10 +76,39 @@ func sliceAnsiString(s string, start, end int) string {
 
 		// Regular character - check if it's in our range
 		charWidth := runewidth.RuneWidth(r)
-		if visualPos >= start && (end == -1 || visualPos < end) {
-			result.WriteRune(r)
+		charEnd := visualPos + charWidth
+
+		if end != -1 && visualPos < end && charEnd > end {
+			// Character would extend past end boundary - skip it but pad with spaces
+			// (This handles wide chars that would be split)
+			spacesNeeded := end - visualPos
+			result.WriteString(strings.Repeat(" ", spacesNeeded))
+			outputWidth += spacesNeeded
+			visualPos = charEnd
+			continue
 		}
-		visualPos += charWidth
+
+		if visualPos >= start && (end == -1 || charEnd <= end) {
+			// Character fully within range
+			if visualPos > start && outputWidth == 0 {
+				// We're starting mid-string, might have skipped a wide char
+				// Pad with spaces to maintain alignment
+				result.WriteString(strings.Repeat(" ", visualPos-start))
+				outputWidth += visualPos - start
+			}
+			result.WriteRune(r)
+			outputWidth += charWidth
+		} else if visualPos < start && charEnd > start {
+			// Wide character straddles the start boundary - skip it, pad with space
+			spacesNeeded := charEnd - start
+			if end != -1 && start+spacesNeeded > end {
+				spacesNeeded = end - start
+			}
+			result.WriteString(strings.Repeat(" ", spacesNeeded))
+			outputWidth += spacesNeeded
+		}
+
+		visualPos = charEnd
 	}
 
 	return result.String()

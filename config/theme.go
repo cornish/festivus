@@ -47,6 +47,9 @@ type UIColors struct {
 	// Scrollbar colors
 	ScrollbarTrack string `toml:"scrollbar_track"` // Scrollbar track color
 	ScrollbarThumb string `toml:"scrollbar_thumb"` // Scrollbar thumb color
+	// Minimap colors
+	MinimapIndicator string `toml:"minimap_indicator"` // Viewport indicator color
+	MinimapText      string `toml:"minimap_text"`      // Braille text color
 }
 
 // SyntaxColors holds syntax highlighting color settings
@@ -88,6 +91,8 @@ var builtinThemes = map[string]Theme{
 			DialogButtonFg:   "15", // White
 			ScrollbarTrack:   "8",  // Gray
 			ScrollbarThumb:   "6",  // Cyan
+			MinimapIndicator: "6",  // Cyan
+			MinimapText:      "8",  // Gray
 		},
 		Syntax: SyntaxColors{
 			Keyword:  "14", // Bright cyan
@@ -125,6 +130,8 @@ var builtinThemes = map[string]Theme{
 			DialogButtonFg:   "15",  // White
 			ScrollbarTrack:   "240", // Medium gray
 			ScrollbarThumb:   "43",  // Teal
+			MinimapIndicator: "43",  // Teal
+			MinimapText:      "245", // Gray
 		},
 		Syntax: SyntaxColors{
 			Keyword:  "176", // Purple
@@ -162,6 +169,8 @@ var builtinThemes = map[string]Theme{
 			DialogButtonFg:   "15",  // White
 			ScrollbarTrack:   "249", // Medium gray
 			ScrollbarThumb:   "32",  // Blue
+			MinimapIndicator: "32",  // Blue
+			MinimapText:      "245", // Gray
 		},
 		Syntax: SyntaxColors{
 			Keyword:  "26",  // Blue
@@ -199,6 +208,8 @@ var builtinThemes = map[string]Theme{
 			DialogButtonFg:   "231", // White
 			ScrollbarTrack:   "59",  // Gray
 			ScrollbarThumb:   "208", // Orange
+			MinimapIndicator: "208", // Orange
+			MinimapText:      "59",  // Gray
 		},
 		Syntax: SyntaxColors{
 			Keyword:  "197", // Pink-red
@@ -236,6 +247,8 @@ var builtinThemes = map[string]Theme{
 			DialogButtonFg:   "#ECEFF4", // nord6
 			ScrollbarTrack:   "#4C566A", // nord3
 			ScrollbarThumb:   "#5E81AC", // nord10
+			MinimapIndicator: "#88C0D0", // nord8
+			MinimapText:      "#4C566A", // nord3
 		},
 		Syntax: SyntaxColors{
 			Keyword:  "#81A1C1", // nord9
@@ -273,6 +286,8 @@ var builtinThemes = map[string]Theme{
 			DialogButtonFg:   "#282A36", // background
 			ScrollbarTrack:   "#6272A4", // comment
 			ScrollbarThumb:   "#BD93F9", // purple
+			MinimapIndicator: "#BD93F9", // purple
+			MinimapText:      "#6272A4", // comment
 		},
 		Syntax: SyntaxColors{
 			Keyword:  "#FF79C6", // pink
@@ -310,6 +325,8 @@ var builtinThemes = map[string]Theme{
 			DialogButtonFg:   "#EBDBB2", // fg1
 			ScrollbarTrack:   "#665C54", // bg3
 			ScrollbarThumb:   "#D79921", // yellow
+			MinimapIndicator: "#D79921", // yellow
+			MinimapText:      "#665C54", // bg3
 		},
 		Syntax: SyntaxColors{
 			Keyword:  "#FB4934", // bright red
@@ -347,6 +364,8 @@ var builtinThemes = map[string]Theme{
 			DialogButtonFg:   "#FDF6E3", // base3
 			ScrollbarTrack:   "#586E75", // base01
 			ScrollbarThumb:   "#268BD2", // blue
+			MinimapIndicator: "#2AA198", // cyan
+			MinimapText:      "#586E75", // base01
 		},
 		Syntax: SyntaxColors{
 			Keyword:  "#859900", // green
@@ -384,6 +403,8 @@ var builtinThemes = map[string]Theme{
 			DialogButtonFg:   "#1E1E2E", // base
 			ScrollbarTrack:   "#6C7086", // overlay0
 			ScrollbarThumb:   "#CBA6F7", // mauve
+			MinimapIndicator: "#F5C2E7", // pink
+			MinimapText:      "#6C7086", // overlay0
 		},
 		Syntax: SyntaxColors{
 			Keyword:  "#CBA6F7", // mauve
@@ -521,6 +542,12 @@ func mergeWithDefault(theme Theme) Theme {
 	}
 	if theme.UI.ScrollbarThumb == "" {
 		theme.UI.ScrollbarThumb = def.UI.ScrollbarThumb
+	}
+	if theme.UI.MinimapIndicator == "" {
+		theme.UI.MinimapIndicator = def.UI.MinimapIndicator
+	}
+	if theme.UI.MinimapText == "" {
+		theme.UI.MinimapText = def.UI.MinimapText
 	}
 
 	// Syntax colors
