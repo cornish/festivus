@@ -107,7 +107,8 @@ const (
 	PromptConfirmOverwrite
 	PromptGoToLine
 	PromptThemeCopyName
-	PromptFileChanged // File changed on disk - reload?
+	PromptFileChanged      // File changed on disk - reload?
+	PromptConfirmLossySave // Confirm save with character loss
 )
 
 // fileCheckMsg is sent periodically to check for external file changes
@@ -221,11 +222,14 @@ type Editor struct {
 	replaceFocus bool // true = replace field, false = find field
 
 	// Prompt mode state
-	promptText      string       // The prompt message
-	promptInput     string       // User's input
-	promptAction    PromptAction // What to do with the result
-	pendingFilename string       // Filename pending confirmation (for overwrite)
-	pendingQuit     bool         // Whether to quit after current action
+	promptText           string       // The prompt message
+	promptInput          string       // User's input
+	promptAction         PromptAction // What to do with the result
+	pendingFilename      string       // Filename pending confirmation (for overwrite)
+	pendingQuit          bool         // Whether to quit after current action
+	pendingLossySave     bool         // Lossy save pending confirmation
+	pendingLossyCount    int          // Number of characters that will be lost
+	pendingLossyInDialog bool         // Whether lossy save was triggered from dialog
 
 	// Terminal state
 	pendingTitle   string // Title to set on next render
@@ -789,16 +793,41 @@ func (e *Editor) doSave() bool {
 
 	content := e.activeDoc().buffer.String()
 	var outputData []byte
-	var encErr error
 	docEnc := e.activeDoc().encoding
+
+	// Check for encoding loss (unless this is a confirmed lossy save)
+	if !e.pendingLossySave && docEnc != nil && docEnc.Supported && docEnc.Encoder != nil {
+		lossCount := enc.CheckEncodingLoss([]byte(content), docEnc)
+		if lossCount > 0 {
+			// Prompt for confirmation
+			e.pendingLossyCount = lossCount
+			e.pendingLossySave = true
+			e.pendingLossyInDialog = false
+			charWord := "character"
+			if lossCount > 1 {
+				charWord = "characters"
+			}
+			e.showPrompt(fmt.Sprintf("%d %s cannot be represented in %s. Save anyway? (y/N)", lossCount, charWord, docEnc.Name), PromptConfirmLossySave)
+			return false
+		}
+	}
 
 	// Encode to original encoding if supported, otherwise save as UTF-8
 	if docEnc != nil && docEnc.Supported {
-		outputData, encErr = enc.EncodeFromUTF8([]byte(content), docEnc)
-		if encErr != nil {
-			e.statusbar.SetMessage("Encoding failed, saving as UTF-8", "warning")
-			outputData = []byte(content)
-			e.activeDoc().encoding = enc.GetEncodingByID("utf-8")
+		if e.pendingLossySave {
+			// User confirmed lossy save - use replacement characters
+			outputData = enc.EncodeFromUTF8Lossy([]byte(content), docEnc)
+			e.pendingLossySave = false
+			e.pendingLossyCount = 0
+		} else {
+			var encErr error
+			outputData, encErr = enc.EncodeFromUTF8([]byte(content), docEnc)
+			if encErr != nil {
+				// This shouldn't happen if CheckEncodingLoss works correctly
+				e.statusbar.SetMessage("Encoding failed, saving as UTF-8", "warning")
+				outputData = []byte(content)
+				e.activeDoc().encoding = enc.GetEncodingByID("utf-8")
+			}
 		}
 	} else {
 		// Unsupported encoding - convert to UTF-8
@@ -824,9 +853,7 @@ func (e *Editor) doSave() bool {
 	}
 
 	e.activeDoc().modified = false
-	if encErr == nil && (docEnc == nil || docEnc.Supported) {
-		e.statusbar.SetMessage("Saved: "+e.activeDoc().filename, "success")
-	}
+	e.statusbar.SetMessage("Saved: "+e.activeDoc().filename, "success")
 	e.updateTitle()
 	e.updateMenuState()
 
@@ -907,13 +934,40 @@ func (e *Editor) doSaveInDialog() bool {
 	var outputData []byte
 	docEnc := e.activeDoc().encoding
 
+	// Check for encoding loss (unless this is a confirmed lossy save)
+	if !e.pendingLossySave && docEnc != nil && docEnc.Supported && docEnc.Encoder != nil {
+		lossCount := enc.CheckEncodingLoss([]byte(content), docEnc)
+		if lossCount > 0 {
+			// Prompt for confirmation
+			e.pendingLossyCount = lossCount
+			e.pendingLossySave = true
+			e.pendingLossyInDialog = true
+			charWord := "character"
+			if lossCount > 1 {
+				charWord = "characters"
+			}
+			e.showPrompt(fmt.Sprintf("%d %s cannot be represented in %s. Save anyway? (y/N)", lossCount, charWord, docEnc.Name), PromptConfirmLossySave)
+			return false
+		}
+	}
+
 	// Encode to original encoding if supported, otherwise save as UTF-8
 	if docEnc != nil && docEnc.Supported {
-		var encErr error
-		outputData, encErr = enc.EncodeFromUTF8([]byte(content), docEnc)
-		if encErr != nil {
-			outputData = []byte(content)
-			e.activeDoc().encoding = enc.GetEncodingByID("utf-8")
+		if e.pendingLossySave {
+			// User confirmed lossy save - use replacement characters
+			outputData = enc.EncodeFromUTF8Lossy([]byte(content), docEnc)
+			e.pendingLossySave = false
+			e.pendingLossyCount = 0
+			e.pendingLossyInDialog = false
+		} else {
+			var encErr error
+			outputData, encErr = enc.EncodeFromUTF8([]byte(content), docEnc)
+			if encErr != nil {
+				// This shouldn't happen if CheckEncodingLoss works correctly
+				e.statusbar.SetMessage("Encoding failed, saving as UTF-8", "warning")
+				outputData = []byte(content)
+				e.activeDoc().encoding = enc.GetEncodingByID("utf-8")
+			}
 		}
 	} else {
 		outputData = []byte(content)
@@ -1691,13 +1745,18 @@ func (e *Editor) handlePromptKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		e.statusbar.SetMessage("Cancelled", "info")
 
 	case tea.KeyEnter:
+		oldPromptAction := e.promptAction
 		e.executePrompt()
 		// If quit was confirmed, exit immediately
 		if e.pendingQuit {
 			return e, tea.Quit
 		}
-		e.mode = ModeNormal
-		e.updateViewportSize()
+		// Only return to normal mode if executePrompt didn't set up another prompt
+		// (showPrompt changes promptAction)
+		if e.promptAction == oldPromptAction {
+			e.mode = ModeNormal
+			e.updateViewportSize()
+		}
 
 	case tea.KeyBackspace:
 		if len(e.promptInput) > 0 {
@@ -1745,6 +1804,29 @@ func (e *Editor) executePrompt() {
 			e.statusbar.SetMessage("Save cancelled", "info")
 		}
 		e.pendingFilename = ""
+
+	case PromptConfirmLossySave:
+		if strings.ToLower(input) == "y" || strings.ToLower(input) == "yes" {
+			// Proceed with lossy save (pendingLossySave is already true)
+			if e.pendingLossyInDialog {
+				if e.doSaveInDialog() {
+					e.mode = ModeNormal
+					e.updateTitle()
+				} else {
+					e.mode = ModeFileBrowser
+				}
+			} else {
+				e.doSave()
+			}
+		} else {
+			e.statusbar.SetMessage("Save cancelled", "info")
+			e.pendingLossySave = false
+			e.pendingLossyCount = 0
+			if e.pendingLossyInDialog {
+				e.mode = ModeFileBrowser
+			}
+		}
+		e.pendingLossyInDialog = false
 
 	case PromptOpen:
 		if input != "" {

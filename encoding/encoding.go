@@ -287,7 +287,9 @@ func DecodeToUTF8(data []byte, enc *Encoding) ([]byte, error) {
 	return io.ReadAll(reader)
 }
 
-// EncodeFromUTF8 encodes UTF-8 data to the given encoding
+// EncodeFromUTF8 encodes UTF-8 data to the given encoding.
+// Returns an error if characters cannot be represented.
+// Use EncodeFromUTF8Lossy for lossy conversion with replacement characters.
 func EncodeFromUTF8(data []byte, enc *Encoding) ([]byte, error) {
 	if enc == nil || enc.Encoder == nil {
 		// UTF-8 or UTF-8 BOM
@@ -317,6 +319,58 @@ func EncodeFromUTF8(data []byte, enc *Encoding) ([]byte, error) {
 	}
 
 	return buf.Bytes(), nil
+}
+
+// EncodeFromUTF8Lossy encodes UTF-8 data to the given encoding,
+// replacing characters that cannot be represented with a substitute character.
+func EncodeFromUTF8Lossy(data []byte, enc *Encoding) []byte {
+	if enc == nil || enc.Encoder == nil {
+		// UTF-8 or UTF-8 BOM
+		if enc != nil && enc.ID == "utf-8-bom" {
+			return append(utf8BOM, data...)
+		}
+		return data
+	}
+
+	var buf bytes.Buffer
+
+	// Add BOM for UTF-16
+	if enc.ID == "utf-16-le" {
+		buf.Write(utf16LEBOM)
+	} else if enc.ID == "utf-16-be" {
+		buf.Write(utf16BEBOM)
+	}
+
+	// Use ReplaceUnsupported to handle characters that can't be encoded
+	encoder := encoding.ReplaceUnsupported(enc.Encoder.NewEncoder())
+	writer := transform.NewWriter(&buf, encoder)
+	writer.Write(data)
+	writer.Close()
+
+	return buf.Bytes()
+}
+
+// CheckEncodingLoss checks if encoding the data will cause character loss.
+// Returns the number of characters that cannot be represented in the target encoding.
+func CheckEncodingLoss(data []byte, enc *Encoding) int {
+	if enc == nil || enc.Encoder == nil {
+		// UTF-8 can represent everything
+		return 0
+	}
+
+	lossCount := 0
+	content := string(data)
+	encoder := enc.Encoder.NewEncoder()
+
+	for _, r := range content {
+		_, err := encoder.Bytes([]byte(string(r)))
+		if err != nil {
+			lossCount++
+		}
+		encoder.Reset()
+	}
+
+	return lossCount
 }
 
 // GetSupportedEncodings returns all supported encodings
