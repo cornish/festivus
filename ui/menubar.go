@@ -67,6 +67,11 @@ const (
 	ActionBuffer18
 	ActionBuffer19
 	ActionBuffer20
+	// Window menu
+	ActionSplitHorizontal
+	ActionSplitVertical
+	ActionCloseSplit
+	ActionSwitchPane
 	// Help menu
 	ActionHelp
 	ActionAbout
@@ -157,6 +162,15 @@ func NewMenuBar(styles Styles) *MenuBar {
 				},
 			},
 			{
+				Label: "Window",
+				Items: []MenuItem{
+					{Label: "Split Horizontal", Shortcut: "Ctrl+Shift+-", HotKey: 'H', Action: ActionSplitHorizontal},
+					{Label: "Split Vertical", Shortcut: "Ctrl+Shift+\\", HotKey: 'V', Action: ActionSplitVertical},
+					{Label: "Close Split", Shortcut: "Ctrl+Shift+W", HotKey: 'C', Action: ActionCloseSplit},
+					{Label: "Switch Pane", Shortcut: "F6", HotKey: 'S', Action: ActionSwitchPane},
+				},
+			},
+			{
 				Label: "Help",
 				Items: []MenuItem{
 					{Label: "Help", Shortcut: "F1", HotKey: 'H', Action: ActionHelp},
@@ -203,6 +217,11 @@ func (m *MenuBar) UpdateShortcuts(kb *config.KeybindingsConfig) {
 		ActionGoToLine: kb.GoToLine,
 		// Options menu
 		ActionLineNumbers: kb.ToggleLineNumbers,
+		// Window menu
+		ActionSplitHorizontal: kb.SplitHorizontal,
+		ActionSplitVertical:   kb.SplitVertical,
+		ActionCloseSplit:      kb.CloseSplit,
+		ActionSwitchPane:      kb.SwitchPane,
 		// Help menu
 		ActionHelp: kb.Help,
 	}

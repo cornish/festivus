@@ -300,6 +300,9 @@ type Editor struct {
 
 	// Encoding dialog state
 	encodingIndex int // Selected encoding index
+
+	// Split view support
+	split *SplitLayout // nil when no split active
 }
 
 // activeDoc returns the currently active document
@@ -315,14 +318,31 @@ func (e *Editor) switchToBuffer(idx int) {
 	if idx < 0 || idx >= len(e.documents) || idx == e.activeIdx {
 		return
 	}
-	// Save current scroll position
-	e.activeDoc().scrollY = e.viewport.ScrollY()
+
+	// In split mode, update the active pane
+	if e.split != nil {
+		// Save current scroll position to active pane
+		e.split.ActivePane().SetScrollY(e.viewport.ScrollY())
+		e.split.ActivePane().SetScrollX(e.viewport.ScrollX())
+		// Update active pane's document index
+		e.split.ActivePane().SetDocumentIdx(idx)
+		// Reset scroll for new document
+		e.split.ActivePane().SetScrollY(0)
+		e.split.ActivePane().SetScrollX(0)
+	} else {
+		// Save current scroll position to document
+		e.activeDoc().scrollY = e.viewport.ScrollY()
+	}
 
 	// Switch
 	e.activeIdx = idx
 
 	// Restore new doc's scroll position
-	e.viewport.SetScrollY(e.activeDoc().scrollY)
+	if e.split != nil {
+		e.viewport.SetScrollY(e.split.ActivePane().ScrollY())
+	} else {
+		e.viewport.SetScrollY(e.activeDoc().scrollY)
+	}
 
 	// Update title, menu, and status
 	e.updateTitle()
@@ -367,6 +387,95 @@ func (e *Editor) findBufferByFilename(filename string) int {
 		}
 	}
 	return -1
+}
+
+// Split view helper methods
+
+// HasSplit returns true if the editor is in split view mode.
+func (e *Editor) HasSplit() bool {
+	return e.split != nil
+}
+
+// activePaneScrollY returns the scroll Y position for the active pane,
+// or the viewport's scroll position when not in split mode.
+func (e *Editor) activePaneScrollY() int {
+	if e.split != nil {
+		return e.split.ActivePane().ScrollY()
+	}
+	return e.viewport.ScrollY()
+}
+
+// activePaneScrollX returns the scroll X position for the active pane,
+// or the viewport's scroll position when not in split mode.
+func (e *Editor) activePaneScrollX() int {
+	if e.split != nil {
+		return e.split.ActivePane().ScrollX()
+	}
+	return e.viewport.ScrollX()
+}
+
+// setActivePaneScrollY sets the scroll Y position for the active pane.
+func (e *Editor) setActivePaneScrollY(y int) {
+	if e.split != nil {
+		e.split.ActivePane().SetScrollY(y)
+	}
+	e.viewport.SetScrollY(y)
+}
+
+// setActivePaneScrollX sets the scroll X position for the active pane.
+func (e *Editor) setActivePaneScrollX(x int) {
+	if e.split != nil {
+		e.split.ActivePane().SetScrollX(x)
+	}
+	e.viewport.SetScrollX(x)
+}
+
+// syncPaneScroll synchronizes the viewport scroll with the active pane's scroll.
+func (e *Editor) syncPaneScroll() {
+	if e.split != nil {
+		e.viewport.SetScrollY(e.split.ActivePane().ScrollY())
+		e.viewport.SetScrollX(e.split.ActivePane().ScrollX())
+	}
+}
+
+// savePaneScroll saves the viewport's current scroll position to the active pane.
+func (e *Editor) savePaneScroll() {
+	if e.split != nil {
+		e.split.ActivePane().SetScrollY(e.viewport.ScrollY())
+		e.split.ActivePane().SetScrollX(e.viewport.ScrollX())
+	}
+}
+
+// paneAtPosition determines which pane contains the given screen coordinates.
+// Returns 0 for pane1, 1 for pane2, or -1 if not in split mode.
+func (e *Editor) paneAtPosition(x, y int) int {
+	if e.split == nil {
+		return -1
+	}
+
+	// Use compositor height (full viewport height)
+	totalHeight := e.compositor.Height()
+	totalWidth := e.width
+
+	if e.split.Orientation() == SplitHorizontal {
+		// Horizontal split: top/bottom
+		pane1Height := (totalHeight - 1) / 2
+		if y < pane1Height {
+			return 0 // Top pane
+		} else if y == pane1Height {
+			return -1 // Separator
+		}
+		return 1 // Bottom pane
+	}
+
+	// Vertical split: left/right
+	pane1Width := (totalWidth - 1) / 2
+	if x < pane1Width {
+		return 0 // Left pane
+	} else if x == pane1Width {
+		return -1 // Separator
+	}
+	return 1 // Right pane
 }
 
 // matchesBinding checks if a key string matches a configured action
@@ -506,6 +615,24 @@ func (e *Editor) handleConfigurableBinding(keyStr string, msg tea.KeyMsg) (bool,
 	// Help
 	if e.matchesBinding(keyStr, "help") {
 		e.showHelp()
+		return true, nil
+	}
+
+	// Split view operations
+	if e.matchesBinding(keyStr, "split_horizontal") {
+		e.splitHorizontal()
+		return true, nil
+	}
+	if e.matchesBinding(keyStr, "split_vertical") {
+		e.splitVertical()
+		return true, nil
+	}
+	if e.matchesBinding(keyStr, "close_split") {
+		e.closeSplit()
+		return true, nil
+	}
+	if e.matchesBinding(keyStr, "switch_pane") {
+		e.switchPane()
 		return true, nil
 	}
 
@@ -716,6 +843,12 @@ func (e *Editor) LoadFile(filename string) error {
 		currentDoc.modTime = modTime
 		currentDoc.highlighter.SetFile(filename)
 		currentDoc.encoding = detectedEnc
+
+		// Update active pane scroll in split mode
+		if e.split != nil {
+			e.split.ActivePane().SetScrollY(0)
+			e.split.ActivePane().SetScrollX(0)
+		}
 	} else {
 		// Check buffer limit before creating new document
 		maxBuffers := 20 // default
@@ -742,6 +875,13 @@ func (e *Editor) LoadFile(filename string) error {
 		}
 		e.documents = append(e.documents, doc)
 		e.activeIdx = len(e.documents) - 1
+
+		// Update active pane in split mode
+		if e.split != nil {
+			e.split.ActivePane().SetDocumentIdx(e.activeIdx)
+			e.split.ActivePane().SetScrollY(0)
+			e.split.ActivePane().SetScrollX(0)
+		}
 	}
 
 	// Warn if encoding is unsupported
@@ -1147,9 +1287,31 @@ func (e *Editor) updateViewportSize() {
 		viewportHeight = 1
 	}
 
-	e.viewport.SetSize(e.width, viewportHeight)
-	e.scrollbar.SetHeight(viewportHeight)
-	e.compositor.SetSize(e.width, viewportHeight)
+	// Store full viewport height for split rendering
+	fullViewportHeight := viewportHeight
+	viewportWidth := e.width
+
+	// Adjust viewport dimensions for split mode
+	// This ensures scroll operations use the correct pane dimensions
+	if e.split != nil {
+		if e.split.Orientation() == SplitHorizontal {
+			// Horizontal split: panes have reduced height
+			pane1Height := (fullViewportHeight - 1) / 2
+			pane2Height := fullViewportHeight - pane1Height - 1
+			if e.split.ActivePaneIndex() == 0 {
+				viewportHeight = pane1Height
+			} else {
+				viewportHeight = pane2Height
+			}
+		} else {
+			// Vertical split: panes have reduced width
+			viewportWidth = (e.width - 1) / 2
+		}
+	}
+
+	e.viewport.SetSize(viewportWidth, viewportHeight)
+	e.scrollbar.SetHeight(fullViewportHeight)         // Scrollbar still uses full height
+	e.compositor.SetSize(e.width, fullViewportHeight) // Compositor uses full height for split rendering
 }
 
 // buildRenderState creates a RenderState for the compositor from current editor state.
@@ -1218,6 +1380,230 @@ func (e *Editor) buildRenderState() *ui.RenderState {
 		TotalVisualLines: totalVisualLines,
 		Styles:           e.styles,
 	}
+}
+
+// buildPaneRenderState creates a RenderState for a specific pane in split view.
+// If showCursor is false, cursor line will be set to -1 to hide it.
+func (e *Editor) buildPaneRenderState(pane *Pane, showCursor bool) *ui.RenderState {
+	doc := e.documents[pane.DocumentIdx()]
+	lines := doc.buffer.Lines()
+
+	// For active pane, use viewport's current scroll (which is kept up to date by scroll operations)
+	// For inactive pane, use the stored pane scroll position
+	scrollY := pane.ScrollY()
+	scrollX := pane.ScrollX()
+	if showCursor {
+		// This is the active pane - use viewport scroll which is updated by cursor movement
+		scrollY = e.viewport.ScrollY()
+		scrollX = e.viewport.ScrollX()
+	}
+
+	// Build selection map
+	selectionMap := make(map[int]ui.SelectionRange)
+	if doc.selection.Active && !doc.selection.IsEmpty() {
+		start, end := doc.selection.Normalize()
+		startLine, startCol := doc.buffer.PositionToLineCol(start)
+		endLine, endCol := doc.buffer.PositionToLineCol(end)
+
+		for line := startLine; line <= endLine; line++ {
+			sr := ui.SelectionRange{Start: 0, End: -1}
+			if line == startLine {
+				sr.Start = startCol
+			}
+			if line == endLine {
+				sr.End = endCol
+			}
+			selectionMap[line] = sr
+		}
+	}
+
+	// Generate syntax highlighting colors
+	var lineColors map[int][]syntax.ColorSpan
+	if doc.highlighter.Enabled() && doc.highlighter.HasLexer() {
+		lineColors = make(map[int][]syntax.ColorSpan)
+		startLine := scrollY
+		endLine := startLine + e.viewport.Height()
+		if endLine > len(lines) {
+			endLine = len(lines)
+		}
+		for i := startLine; i < endLine; i++ {
+			colors := doc.highlighter.GetLineColors(lines[i])
+			if len(colors) > 0 {
+				lineColors[i] = colors
+			}
+		}
+	}
+
+	// Calculate total visual lines
+	totalVisualLines := len(lines)
+	if e.viewport.WordWrap() {
+		totalVisualLines = e.viewport.CountVisualLines(lines)
+	}
+
+	// Cursor position: show only if this pane is active
+	cursorLine := -1
+	cursorCol := 0
+	if showCursor {
+		cursorLine = doc.cursor.Line()
+		cursorCol = doc.cursor.Col()
+	}
+
+	return &ui.RenderState{
+		Lines:            lines,
+		CursorLine:       cursorLine,
+		CursorCol:        cursorCol,
+		ScrollY:          scrollY,
+		ScrollX:          scrollX,
+		Selection:        selectionMap,
+		LineColors:       lineColors,
+		WordWrap:         e.viewport.WordWrap(),
+		TabWidth:         e.config.Editor.TabWidth,
+		TotalLines:       len(lines),
+		TotalVisualLines: totalVisualLines,
+		Styles:           e.styles,
+	}
+}
+
+// renderSplitView renders the split view content.
+func (e *Editor) renderSplitView() string {
+	if e.split.Orientation() == SplitHorizontal {
+		return e.renderHorizontalSplit()
+	}
+	return e.renderVerticalSplit()
+}
+
+// renderHorizontalSplit renders a top/bottom split view.
+func (e *Editor) renderHorizontalSplit() string {
+	var sb strings.Builder
+	// Use compositor height which holds the full viewport height
+	totalHeight := e.compositor.Height()
+
+	// Calculate pane heights (accounting for separator)
+	pane1Height := (totalHeight - 1) / 2
+	pane2Height := totalHeight - pane1Height - 1
+
+	// Render pane 1 (top)
+	content1 := e.renderPaneContent(0, e.width, pane1Height)
+	sb.WriteString(content1)
+	if !strings.HasSuffix(content1, "\n") {
+		sb.WriteString("\n")
+	}
+
+	// Render horizontal separator
+	sb.WriteString(e.renderHorizontalSeparator())
+	sb.WriteString("\n")
+
+	// Render pane 2 (bottom)
+	content2 := e.renderPaneContent(1, e.width, pane2Height)
+	sb.WriteString(content2)
+
+	return sb.String()
+}
+
+// renderVerticalSplit renders a left/right split view.
+func (e *Editor) renderVerticalSplit() string {
+	var sb strings.Builder
+	// Use compositor height which holds the full viewport height
+	totalHeight := e.compositor.Height()
+	totalWidth := e.width
+
+	// Calculate pane widths (accounting for separator)
+	pane1Width := (totalWidth - 1) / 2
+	pane2Width := totalWidth - pane1Width - 1
+
+	// Render both panes and get their lines
+	lines1 := e.renderPaneLines(0, pane1Width, totalHeight)
+	lines2 := e.renderPaneLines(1, pane2Width, totalHeight)
+
+	// Combine lines with vertical separator
+	sepChar := e.renderVerticalSeparatorChar()
+	for i := 0; i < totalHeight; i++ {
+		if i > 0 {
+			sb.WriteString("\n")
+		}
+		line1 := ""
+		line2 := ""
+		if i < len(lines1) {
+			line1 = lines1[i]
+		}
+		if i < len(lines2) {
+			line2 = lines2[i]
+		}
+		sb.WriteString(line1)
+		sb.WriteString(sepChar)
+		sb.WriteString(line2)
+	}
+
+	return sb.String()
+}
+
+// renderPaneContent renders a single pane's content using the compositor.
+func (e *Editor) renderPaneContent(paneIdx, width, height int) string {
+	pane := e.split.Panes()[paneIdx]
+	isActive := paneIdx == e.split.ActivePaneIndex()
+
+	// Build render state for this pane
+	state := e.buildPaneRenderState(pane, isActive)
+
+	// Temporarily resize compositor and render
+	origWidth := e.compositor.Width()
+	origHeight := e.compositor.Height()
+	e.compositor.SetSize(width, height)
+	result := e.compositor.Render(state)
+	e.compositor.SetSize(origWidth, origHeight)
+
+	return result
+}
+
+// renderPaneLines renders a single pane's content as individual lines.
+func (e *Editor) renderPaneLines(paneIdx, width, height int) []string {
+	content := e.renderPaneContent(paneIdx, width, height)
+	lines := strings.Split(content, "\n")
+
+	// Ensure we have exactly height lines
+	for len(lines) < height {
+		lines = append(lines, strings.Repeat(" ", width))
+	}
+	if len(lines) > height {
+		lines = lines[:height]
+	}
+
+	return lines
+}
+
+// renderHorizontalSeparator renders the separator line for horizontal splits.
+func (e *Editor) renderHorizontalSeparator() string {
+	themeUI := e.styles.Theme.UI
+	sepColor := ui.ColorToANSI(themeUI.MenuFg, themeUI.MenuBg)
+
+	// Create separator with active pane indicator
+	sep := strings.Repeat(e.box.Horizontal, e.width)
+
+	// Build label
+	paneNum := e.split.ActivePaneIndex() + 1
+	label := fmt.Sprintf(" Pane %d ", paneNum)
+
+	// Insert label in center
+	if len(label) < e.width {
+		pos := (e.width - len(label)) / 2
+		if pos > 0 && pos+len(label) < e.width {
+			runes := []rune(sep)
+			labelRunes := []rune(label)
+			for i, r := range labelRunes {
+				runes[pos+i] = r
+			}
+			sep = string(runes)
+		}
+	}
+
+	return sepColor + sep + "\033[0m"
+}
+
+// renderVerticalSeparatorChar returns the character(s) for the vertical separator.
+func (e *Editor) renderVerticalSeparatorChar() string {
+	themeUI := e.styles.Theme.UI
+	sepColor := ui.ColorToANSI(themeUI.MenuFg, themeUI.MenuBg)
+	return sepColor + e.box.Vertical + "\033[0m"
 }
 
 // handleKey handles keyboard input
@@ -1998,6 +2384,24 @@ func (e *Editor) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				e.updateViewportSize()
 			}
 
+			// Handle split view pane switching on click
+			if e.split != nil && y >= 0 && y < e.compositor.Height() {
+				clickedPaneIdx := e.paneAtPosition(msg.X, y)
+				if clickedPaneIdx >= 0 && clickedPaneIdx != e.split.ActivePaneIndex() {
+					// Save current scroll position
+					e.split.ActivePane().SetScrollY(e.viewport.ScrollY())
+					e.split.ActivePane().SetScrollX(e.viewport.ScrollX())
+					// Switch to clicked pane
+					e.split.SetActivePane(clickedPaneIdx)
+					e.activeIdx = e.split.ActivePane().DocumentIdx()
+					// Update viewport size for new pane dimensions
+					e.updateViewportSize()
+					// Restore new pane's scroll position
+					e.viewport.SetScrollY(e.split.ActivePane().ScrollY())
+					e.viewport.SetScrollX(e.split.ActivePane().ScrollX())
+				}
+			}
+
 			// Check if click is on minimap
 			if e.minimapRenderer.IsEnabled() && y >= 0 && y < e.viewport.Height() {
 				// Calculate minimap position (before scrollbar)
@@ -2198,6 +2602,14 @@ func (e *Editor) executeAction(action ui.MenuAction) (tea.Model, tea.Cmd) {
 		e.switchToBuffer(18)
 	case ui.ActionBuffer20:
 		e.switchToBuffer(19)
+	case ui.ActionSplitHorizontal:
+		e.splitHorizontal()
+	case ui.ActionSplitVertical:
+		e.splitVertical()
+	case ui.ActionCloseSplit:
+		e.closeSplit()
+	case ui.ActionSwitchPane:
+		e.switchPane()
 	case ui.ActionHelp:
 		e.showHelp()
 	case ui.ActionAbout:
@@ -4296,6 +4708,125 @@ func (e *Editor) doNewFile() {
 	e.statusbar.SetMessage("New file", "info")
 }
 
+// Split view methods
+
+// splitHorizontal creates a horizontal (top/bottom) split view.
+func (e *Editor) splitHorizontal() {
+	if e.split != nil {
+		e.statusbar.SetMessage("Already in split view", "info")
+		return
+	}
+
+	// Save current scroll position
+	currentScrollY := e.viewport.ScrollY()
+	currentScrollX := e.viewport.ScrollX()
+
+	// Create a new empty document for the second pane
+	e.doNewFile()
+	newDocIdx := len(e.documents) - 1
+
+	// Create the split layout
+	e.split = NewSplitLayout(SplitHorizontal, e.activeIdx-1, newDocIdx)
+	if e.activeIdx > 0 {
+		e.split.Pane1().SetDocumentIdx(e.activeIdx - 1)
+	} else {
+		e.split.Pane1().SetDocumentIdx(0)
+	}
+
+	// Restore scroll position to pane1
+	e.split.Pane1().SetScrollY(currentScrollY)
+	e.split.Pane1().SetScrollX(currentScrollX)
+
+	// Switch back to the original document
+	origDocIdx := e.split.Pane1().DocumentIdx()
+	e.activeIdx = origDocIdx
+
+	e.updateMenuState()
+	e.updateViewportSize()
+	e.statusbar.SetMessage("Split horizontal (F6 to switch panes)", "info")
+}
+
+// splitVertical creates a vertical (left/right) split view.
+func (e *Editor) splitVertical() {
+	if e.split != nil {
+		e.statusbar.SetMessage("Already in split view", "info")
+		return
+	}
+
+	// Save current scroll position
+	currentScrollY := e.viewport.ScrollY()
+	currentScrollX := e.viewport.ScrollX()
+
+	// Create a new empty document for the second pane
+	e.doNewFile()
+	newDocIdx := len(e.documents) - 1
+
+	// Create the split layout
+	e.split = NewSplitLayout(SplitVertical, e.activeIdx-1, newDocIdx)
+	if e.activeIdx > 0 {
+		e.split.Pane1().SetDocumentIdx(e.activeIdx - 1)
+	} else {
+		e.split.Pane1().SetDocumentIdx(0)
+	}
+
+	// Restore scroll position to pane1
+	e.split.Pane1().SetScrollY(currentScrollY)
+	e.split.Pane1().SetScrollX(currentScrollX)
+
+	// Switch back to the original document
+	origDocIdx := e.split.Pane1().DocumentIdx()
+	e.activeIdx = origDocIdx
+
+	e.updateMenuState()
+	e.updateViewportSize()
+	e.statusbar.SetMessage("Split vertical (F6 to switch panes)", "info")
+}
+
+// closeSplit closes the split view, keeping the active pane's document.
+func (e *Editor) closeSplit() {
+	if e.split == nil {
+		return
+	}
+
+	// Keep the active pane's document as the current document
+	e.activeIdx = e.split.ActivePane().DocumentIdx()
+	e.viewport.SetScrollY(e.split.ActivePane().ScrollY())
+	e.viewport.SetScrollX(e.split.ActivePane().ScrollX())
+
+	e.split = nil
+
+	e.updateMenuState()
+	e.updateViewportSize()
+	e.statusbar.SetMessage("Split closed", "info")
+}
+
+// switchPane switches focus to the other pane in split view.
+func (e *Editor) switchPane() {
+	if e.split == nil {
+		return
+	}
+
+	// Save current scroll position to active pane
+	e.split.ActivePane().SetScrollY(e.viewport.ScrollY())
+	e.split.ActivePane().SetScrollX(e.viewport.ScrollX())
+
+	// Switch to the other pane
+	e.split.SwitchPane()
+
+	// Update activeIdx to match the new active pane
+	e.activeIdx = e.split.ActivePane().DocumentIdx()
+
+	// Update viewport size for new pane dimensions (important for horizontal splits)
+	e.updateViewportSize()
+
+	// Restore new active pane's scroll position
+	e.viewport.SetScrollY(e.split.ActivePane().ScrollY())
+	e.viewport.SetScrollX(e.split.ActivePane().ScrollX())
+
+	paneNum := e.split.ActivePaneIndex() + 1
+	e.statusbar.SetMessage(fmt.Sprintf("Pane %d active", paneNum), "info")
+}
+
 // closeFile closes the current file (same as new, but different messaging)
 func (e *Editor) closeFile() {
 	if e.activeDoc().modified {
@@ -4306,12 +4837,46 @@ func (e *Editor) closeFile() {
 }
 
 func (e *Editor) doCloseFile() {
+	closedIdx := e.activeIdx
+
 	if len(e.documents) > 1 {
 		// Multiple buffers - remove current and switch to another
 		e.documents = append(e.documents[:e.activeIdx], e.documents[e.activeIdx+1:]...)
 		if e.activeIdx >= len(e.documents) {
 			e.activeIdx = len(e.documents) - 1
 		}
+
+		// Handle split view: update pane indices
+		if e.split != nil {
+			for _, pane := range e.split.Panes() {
+				if pane.DocumentIdx() == closedIdx {
+					// This pane was showing the closed buffer
+					// Create a new empty buffer for it
+					buf := NewBuffer()
+					doc := &Document{
+						buffer:      buf,
+						cursor:      NewCursor(buf),
+						selection:   NewSelection(),
+						undoStack:   NewUndoStack(100),
+						filename:    "",
+						modified:    false,
+						scrollY:     0,
+						highlighter: syntax.New(""),
+						encoding:    enc.GetEncodingByID("utf-8"),
+					}
+					e.documents = append(e.documents, doc)
+					pane.SetDocumentIdx(len(e.documents) - 1)
+					pane.SetScrollY(0)
+					pane.SetScrollX(0)
+				} else if pane.DocumentIdx() > closedIdx {
+					// Adjust index since a document was removed before this one
+					pane.SetDocumentIdx(pane.DocumentIdx() - 1)
+				}
+			}
+			// Update activeIdx to match active pane
+			e.activeIdx = e.split.ActivePane().DocumentIdx()
+		}
+
 		// Restore scroll position of new active buffer
 		e.viewport.SetScrollY(e.activeDoc().scrollY)
 		e.statusbar.SetMessage("Buffer closed", "info")
@@ -4639,9 +5204,16 @@ func (e *Editor) View() string {
 	sb.WriteString(e.menubar.View())
 	sb.WriteString("\n")
 
-	// Render editor content using compositor
+	// Build render state (needed for minimap even in split mode)
 	renderState := e.buildRenderState()
-	viewportContent := e.compositor.Render(renderState)
+
+	// Render editor content using compositor
+	var viewportContent string
+	if e.split != nil {
+		viewportContent = e.renderSplitView()
+	} else {
+		viewportContent = e.compositor.Render(renderState)
+	}
 
 	// If menu dropdown is open, overlay it on top of the viewport
 	if e.menubar.IsOpen() {

@@ -53,6 +53,12 @@ type KeybindingsConfig struct {
 	// View toggles
 	ToggleLineNumbers KeyBinding `toml:"toggle_line_numbers"`
 
+	// Split view operations
+	SplitHorizontal KeyBinding `toml:"split_horizontal"`
+	SplitVertical   KeyBinding `toml:"split_vertical"`
+	CloseSplit      KeyBinding `toml:"close_split"`
+	SwitchPane      KeyBinding `toml:"switch_pane"`
+
 	// Help
 	Help KeyBinding `toml:"help"`
 }
@@ -97,6 +103,12 @@ func DefaultKeybindings() *KeybindingsConfig {
 		// View toggles
 		ToggleLineNumbers: KeyBinding{Primary: "ctrl+l"},
 
+		// Split view operations
+		SplitHorizontal: KeyBinding{Primary: "ctrl+shift+-"},
+		SplitVertical:   KeyBinding{Primary: "ctrl+shift+\\"},
+		CloseSplit:      KeyBinding{Primary: "ctrl+shift+w"},
+		SwitchPane:      KeyBinding{Primary: "f6"},
+
 		// Help
 		Help: KeyBinding{Primary: "f1"},
 	}
@@ -129,6 +141,10 @@ var ActionNames = map[string]string{
 	"next_buffer":         "Next Buffer",
 	"prev_buffer":         "Previous Buffer",
 	"toggle_line_numbers": "Toggle Line Numbers",
+	"split_horizontal":    "Split Horizontal",
+	"split_vertical":      "Split Vertical",
+	"close_split":         "Close Split",
+	"switch_pane":         "Switch Pane",
 	"help":                "Help",
 }
 
@@ -244,6 +260,14 @@ func (kb *KeybindingsConfig) GetBinding(action string) KeyBinding {
 		return kb.PrevBuffer
 	case "toggle_line_numbers":
 		return kb.ToggleLineNumbers
+	case "split_horizontal":
+		return kb.SplitHorizontal
+	case "split_vertical":
+		return kb.SplitVertical
+	case "close_split":
+		return kb.CloseSplit
+	case "switch_pane":
+		return kb.SwitchPane
 	case "help":
 		return kb.Help
 	}
@@ -303,6 +327,14 @@ func (kb *KeybindingsConfig) SetBinding(action string, binding KeyBinding) {
 		kb.PrevBuffer = binding
 	case "toggle_line_numbers":
 		kb.ToggleLineNumbers = binding
+	case "split_horizontal":
+		kb.SplitHorizontal = binding
+	case "split_vertical":
+		kb.SplitVertical = binding
+	case "close_split":
+		kb.CloseSplit = binding
+	case "switch_pane":
+		kb.SwitchPane = binding
 	case "help":
 		kb.Help = binding
 	}
@@ -317,6 +349,7 @@ func AllActions() []string {
 		"word_left", "word_right", "doc_start", "doc_end",
 		"next_buffer", "prev_buffer",
 		"toggle_line_numbers",
+		"split_horizontal", "split_vertical", "close_split", "switch_pane",
 		"help",
 	}
 }
